@@ -1,87 +1,23 @@
 version: '3.8'
 
 services:
-  # WhatsApp Worker 1
-  worker-1:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: whatsapp-worker-1
+  worker:
+    image: whatsapp-worker:latest
     environment:
-      WORKER_ID: worker-1
-      WORKER_NAME: "WhatsApp Worker 1"
       RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      BACKEND_API_URL: http://backend:8080/api
-      LOG_LEVEL: info
-      NODE_ENV: production
+      BACKEND_API_URL: http://213.199.54.136:8080/api
     volumes:
-      - ./sessions/worker-1:/app/sessions
-    depends_on:
-      - rabbitmq
+      - worker_sessions:/app/sessions
     networks:
       - whatsapp-network
-    restart: unless-stopped
-
-  # WhatsApp Worker 2
-  worker-2:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: whatsapp-worker-2
-    environment:
-      WORKER_ID: worker-2
-      WORKER_NAME: "WhatsApp Worker 2"
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      BACKEND_API_URL: http://backend:8080/api
-      LOG_LEVEL: info
-      NODE_ENV: production
-    volumes:
-      - ./sessions/worker-2:/app/sessions
-    depends_on:
-      - rabbitmq
-    networks:
-      - whatsapp-network
-    restart: unless-stopped
-
-  # WhatsApp Worker 3
-  worker-3:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: whatsapp-worker-3
-    environment:
-      WORKER_ID: worker-3
-      WORKER_NAME: "WhatsApp Worker 3"
-      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672
-      BACKEND_API_URL: http://backend:8080/api
-      LOG_LEVEL: info
-      NODE_ENV: production
-    volumes:
-      - ./sessions/worker-3:/app/sessions
-    depends_on:
-      - rabbitmq
-    networks:
-      - whatsapp-network
-    restart: unless-stopped
-
-  # RabbitMQ (si vous n'utilisez pas celui du backend)
-  rabbitmq:
-    image: rabbitmq:3-management-alpine
-    container_name: whatsapp-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: guest
-      RABBITMQ_DEFAULT_PASS: guest
-    ports:
-      - "5672:5672"
-      - "15672:15672"
-    volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
-    networks:
-      - whatsapp-network
+    deploy:
+      replicas: 3
+      restart_policy:
+        condition: on-failure
 
 volumes:
-  rabbitmq_data:
+  worker_sessions:
 
 networks:
   whatsapp-network:
-    external: true  # Use the network created by backend
+    external: true
