@@ -3,7 +3,7 @@ import logger from './utils/logger.js';
 import rabbitmq from '../src/services/rabbitMQService.js';
 import sessionManager from './services/sessionManager.js';
 import messageHandler from './handles/MessageHandler.js';
-import healthHandler from './handles/healthHandler.js';
+import healthHandler from './handles/HealthHandler.js';
 
 class WhatsAppWorker {
   constructor() {
