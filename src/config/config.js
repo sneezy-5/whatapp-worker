@@ -16,7 +16,7 @@ export const config = {
 
   // RabbitMQ
   rabbitmq: {
-    url: process.env.RABBITMQ_URL || 'amqp://guest:guest@localhost:5672',
+    url: process.env.RABBITMQ_URL || 'amqp://guest:guest@213.199.54.136:5672',
     queues: {
       messageSend: process.env.QUEUE_MESSAGE_SEND || 'whatsapp.message.send',
       messageReceive: process.env.QUEUE_MESSAGE_RECEIVE || 'whatsapp.message.receive',
