@@ -5,49 +5,49 @@ FROM node:18-alpine AS dependencies
 
 WORKDIR /app
 
-# Copy package files
+# Installer Git pour les dépendances depuis Git
+RUN apk add --no-cache git
+
+# Copier les fichiers package.json et package-lock.json (si existant)
 COPY package*.json ./
 
-# Install dependencies
+# Installer uniquement les dépendances de production
 RUN npm install --production && npm cache clean --force
-
-# RUN npm install --only=production && \
-#     npm cache clean --force
 
 # Stage 2: Runtime
 FROM node:18-alpine
 
 WORKDIR /app
 
-# Install dumb-init for proper signal handling
+# Installer dumb-init pour la gestion correcte des signaux
 RUN apk add --no-cache dumb-init
 
-# Create non-root user
+# Créer un utilisateur non-root
 RUN addgroup -g 1001 -S nodejs && \
     adduser -S nodejs -u 1001 -G nodejs
 
-# Copy dependencies from previous stage
+# Copier les dépendances depuis le stage précédent
 COPY --from=dependencies /app/node_modules ./node_modules
 
-# Copy application code
+# Copier le code de l'application
 COPY --chown=nodejs:nodejs . .
 
-# Create necessary directories
+# Créer les répertoires nécessaires
 RUN mkdir -p sessions logs && \
     chown -R nodejs:nodejs /app
 
-# Switch to non-root user
+# Utiliser l'utilisateur non-root
 USER nodejs:nodejs
 
-# Expose port (if needed for health checks)
+# Exposer le port pour les health checks si nécessaire
 EXPOSE 3000
 
-# Health check
+# Health check basique
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "console.log('healthy')" || exit 1
 
-# Use dumb-init to handle signals properly
+# Utiliser dumb-init pour gérer les signaux correctement
 ENTRYPOINT ["dumb-init", "--"]
 
-# Start the worker
+# Lancer le worker
 CMD ["node", "src/worker.js"]
