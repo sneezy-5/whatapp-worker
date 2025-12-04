@@ -9,8 +9,10 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install dependencies
-RUN npm install --only=production && \
-    npm cache clean --force
+RUN npm install --production && npm cache clean --force
+
+# RUN npm install --only=production && \
+#     npm cache clean --force
 
 # Stage 2: Runtime
 FROM node:18-alpine
