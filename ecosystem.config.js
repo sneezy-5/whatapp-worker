@@ -2,7 +2,7 @@ module.exports = {
   apps: [
     {
       name: 'whatsapp-worker-1',
-      script: './src/config/worker.js',
+      script: './src/worker.js',
       instances: 1,
       autorestart: true,
       watch: false,
@@ -16,7 +16,7 @@ module.exports = {
     },
     {
       name: 'whatsapp-worker-2',
-      script: './src/config/worker.js',
+      script: './src/worker.js',
       instances: 1,
       autorestart: true,
       watch: false,
@@ -30,7 +30,7 @@ module.exports = {
     },
     {
       name: 'whatsapp-worker-3',
-      script: './src/config/worker.js',
+      script: './src/worker.js',
       instances: 1,
       autorestart: true,
       watch: false,

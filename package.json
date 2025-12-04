@@ -2,11 +2,11 @@
   "name": "whatsapp-worker",
   "version": "1.0.0",
   "description": "WhatsApp Worker with Baileys for message handling",
-  "main": "src/config/worker.js",
+  "main": "src/worker.js",
   "type": "module",
   "scripts": {
-    "start": "node src/config/worker.js",
-    "dev": "nodemon src/config/worker.js",
+    "start": "node src/worker.js",
+    "dev": "nodemon src/worker.js",
     "test": "jest",
     "lint": "eslint src/"
   },

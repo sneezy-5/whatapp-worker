@@ -50,4 +50,4 @@ EXPOSE 3000
 ENTRYPOINT ["dumb-init", "--"]
 
 # Lancer le worker
-CMD ["node", "src/config/worker.js"]
+CMD ["node", "src/worker.js"]
