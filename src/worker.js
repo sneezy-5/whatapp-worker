@@ -1,6 +1,6 @@
 import { config } from './config/config.js';
 import logger from './utils/logger.js';
-import rabbitmq from './services/rabbitmq.js';
+import rabbitmq from '../src/services/rabbitMQService.js';
 import sessionManager from './services/sessionManager.js';
 import messageHandler from './handlers/messageHandler.js';
 import healthHandler from './handlers/healthHandler.js';
