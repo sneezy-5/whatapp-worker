@@ -370,7 +370,7 @@ Ce worker utilise [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Ba
 1. **Utiliser PM2** pour la gestion des processus
 ```bash
 npm install -g pm2
-pm2 start src/worker.js --name worker-1
+pm2 start src/config/worker.js --name worker-1
 ```
 
 2. **Configurer les backups** des sessions
