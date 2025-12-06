@@ -1,9 +1,11 @@
-import makeWASocket, {
+import pkg from '@whiskeysockets/baileys';
+const {
+  default: makeWASocket,
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-} from '@whiskeysockets/baileys';
+} = pkg;
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
