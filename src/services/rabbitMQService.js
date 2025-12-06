@@ -85,7 +85,21 @@ class RabbitMQService {
           this.channel.ack(msg);
 
         } catch (error) {
-          logger.error(`Error processing ${queue}:`, error);
+          // ✅ LOGS DÉTAILLÉS POUR DEBUG
+          console.error('\n========================================');
+          console.error(`❌ ERREUR DANS CONSUMER ${queue}`);
+          console.error('========================================');
+          console.error('Type d\'erreur:', error.constructor.name);
+          console.error('Message:', error.message);
+          console.error('Stack:', error.stack);
+          console.error('Contenu du message:', msg.content.toString());
+          console.error('========================================\n');
+
+          logger.error(`Error processing ${queue}:`, {
+            error: error.message,
+            stack: error.stack,
+            messageContent: msg.content.toString()
+          });
 
           if (error.temporary) {
             this.channel.nack(msg, false, true);
