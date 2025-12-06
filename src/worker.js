@@ -226,6 +226,54 @@ class WhatsAppWorker {
         console.log(`✅ Nouvelle session créée pour numéro ${numberId}`);
         break;
 
+      case 'regenerate_qr':
+        if (!numberId || !phoneNumber) {
+          logger.error('Missing numberId or phoneNumber in regenerate_qr action');
+          console.error('❌ Données manquantes pour regenerate_qr:', { numberId, phoneNumber });
+          return;
+        }
+
+        console.log(`🔄 Régénération manuelle du QR demandée pour numéro ${numberId}...`);
+        logger.info(`Manual QR regeneration requested for number ${numberId}`);
+
+        // Vérifier si une session existe
+        const currentSession = sessionManager.getSession(numberId);
+
+        if (currentSession) {
+          // Vérifier si déjà connecté
+          if (currentSession.connected) {
+            console.log(`✅ Session déjà connectée pour numéro ${numberId} - Pas besoin de QR`);
+            logger.info(`Session already connected for number ${numberId}`);
+
+            // Notifier le backend que la session est déjà connectée
+            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+              action: 'connected',
+              numberId: numberId,
+              sessionId: currentSession.sessionId,
+              message: 'Session already connected. No QR needed.',
+              timestamp: Date.now(),
+            });
+            return;
+          }
+
+          // Session existe mais pas connectée → Fermer et recréer
+          console.log(`🔄 Fermeture de la session existante pour régénération du QR...`);
+          await sessionManager.closeSession(currentSession.sessionId);
+          console.log(`✅ Ancienne session fermée`);
+        }
+
+        // Réinitialiser le compteur de tentatives QR pour ce numéro
+        sessionManager.resetQrRetries(numberId);
+        console.log(`🔄 Compteur de tentatives QR réinitialisé pour numéro ${numberId}`);
+
+        // Créer une nouvelle session (qui générera un nouveau QR)
+        console.log(`🔄 Création d'une nouvelle session pour générer un nouveau QR...`);
+        await sessionManager.createSession(numberId, phoneNumber);
+        console.log(`✅ Nouvelle session créée - Nouveau QR en cours de génération pour numéro ${numberId}`);
+
+        logger.info(`QR regeneration initiated for number ${numberId}`);
+        break;
+
       default:
         logger.warn(`Unknown session action: ${action}`);
         console.warn(`⚠️ Action inconnue: ${action}`);

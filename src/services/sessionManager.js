@@ -367,6 +367,12 @@ class SessionManager {
       connected: s.connected,
     }));
   }
+
+  // Réinitialiser le compteur de tentatives QR pour un numéro spécifique
+  resetQrRetries(numberId) {
+    this.qrRetryAttempts.delete(numberId);
+    logger.info(`QR retry counter reset for number ${numberId}`);
+  }
 }
 
 export default new SessionManager();
