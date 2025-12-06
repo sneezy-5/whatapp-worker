@@ -22,6 +22,8 @@ class SessionManager {
   constructor() {
     this.sessions = new Map();
     this.sessionDir = config.sessions.dir;
+    this.qrRetryAttempts = new Map(); // Track QR retry attempts per numberId
+    this.maxQrRetries = 3; // Maximum number of QR regeneration attempts
 
     // Create session directory if it doesn't exist
     if (!fs.existsSync(this.sessionDir)) {
@@ -147,18 +149,48 @@ class SessionManager {
       if (shouldReconnect) {
         // Vérifier si c'est une erreur de QR expiré
         if (errorMessage.includes('QR refs attempts ended')) {
-          logger.info(`QR code expired for ${sessionId}. Deleting session. Client needs to request a new one.`);
+          const currentAttempts = this.qrRetryAttempts.get(session.numberId) || 0;
 
-          this.sessions.delete(sessionId);
+          logger.info(`QR code expired for ${sessionId}. Attempt ${currentAttempts + 1}/${this.maxQrRetries}`);
 
-          // ✅ CORRIGÉ : Notifier le backend via worker.events
-          await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-            action: 'error',
-            numberId: session.numberId,
-            sessionId,
-            error: 'QR code expired. Please request a new validation.',
-            timestamp: Date.now(),
-          });
+          if (currentAttempts < this.maxQrRetries) {
+            // ✅ RÉGÉNÉRER LE QR CODE
+            this.qrRetryAttempts.set(session.numberId, currentAttempts + 1);
+
+            logger.info(`Regenerating QR code for ${sessionId} (attempt ${currentAttempts + 1}/${this.maxQrRetries})...`);
+
+            // Supprimer l'ancienne session
+            this.sessions.delete(sessionId);
+
+            // Recréer une nouvelle session (qui générera un nouveau QR)
+            await this.createSession(session.numberId, session.phoneNumber);
+
+            // Notifier le backend qu'un nouveau QR est en cours de génération
+            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+              action: 'qr_regenerating',
+              numberId: session.numberId,
+              sessionId,
+              attempt: currentAttempts + 1,
+              maxAttempts: this.maxQrRetries,
+              message: `QR code expired. Generating new QR code (attempt ${currentAttempts + 1}/${this.maxQrRetries})`,
+              timestamp: Date.now(),
+            });
+          } else {
+            // ❌ NOMBRE MAX DE TENTATIVES ATTEINT
+            logger.error(`Max QR retry attempts (${this.maxQrRetries}) reached for ${sessionId}. Giving up.`);
+
+            this.sessions.delete(sessionId);
+            this.qrRetryAttempts.delete(session.numberId); // Reset counter
+
+            // Notifier le backend que toutes les tentatives ont échoué
+            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+              action: 'error',
+              numberId: session.numberId,
+              sessionId,
+              error: `QR code generation failed after ${this.maxQrRetries} attempts. Please request a new validation.`,
+              timestamp: Date.now(),
+            });
+          }
         } else {
           // Autres erreurs - tenter la reconnexion
           logger.info(`Attempting to reconnect ${sessionId}...`);
@@ -187,6 +219,9 @@ class SessionManager {
       logger.info(`Session ${sessionId} connected successfully`);
       session.connected = true;
       session.qrCode = null;
+
+      // ✅ Réinitialiser le compteur de tentatives QR (connexion réussie)
+      this.qrRetryAttempts.delete(session.numberId);
 
       // ✅ CORRIGÉ : Notifier via worker.events
       await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
