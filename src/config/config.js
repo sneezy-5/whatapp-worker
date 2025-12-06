@@ -22,6 +22,7 @@ export const config = {
       messageReceive: process.env.QUEUE_MESSAGE_RECEIVE || 'whatsapp.message.receive',
       numberHealth: process.env.QUEUE_NUMBER_HEALTH || 'whatsapp.number.health',
       sessionUpdate: process.env.QUEUE_SESSION_UPDATE || 'whatsapp.session.update',
+      workerEvents: process.env.QUEUE_WORKER_EVENTS || 'whatsapp.worker.events',
     },
     prefetch: 1,
   },
