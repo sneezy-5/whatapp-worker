@@ -10,9 +10,13 @@ import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
 import rabbitmq from '../services/rabbitMQService.js';
+
+// Make crypto globally available for Baileys
+global.crypto = crypto;
 
 class SessionManager {
   constructor() {
