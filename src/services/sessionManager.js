@@ -4,7 +4,6 @@ import makeWASocket, {
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
 } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
@@ -12,16 +11,13 @@ import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
 import rabbitmq from '../services/rabbitMQService.js';
 
-// Note: crypto is globally available in Node.js 22+
-
 class SessionManager {
   constructor() {
     this.sessions = new Map();
     this.sessionDir = config.sessions.dir;
-    this.qrRetryAttempts = new Map(); // Track QR retry attempts per numberId
-    this.maxQrRetries = 3; // Maximum number of QR regeneration attempts
+    this.qrRetryAttempts = new Map();
+    this.maxQrRetries = 3;
 
-    // Create session directory if it doesn't exist
     if (!fs.existsSync(this.sessionDir)) {
       fs.mkdirSync(this.sessionDir, { recursive: true });
     }
@@ -37,56 +33,81 @@ class SessionManager {
 
     logger.info(`Creating new WhatsApp session: ${sessionId}`);
 
-    const sessionPath = path.join(this.sessionDir, sessionId);
+    try {
+      const sessionPath = path.join(this.sessionDir, sessionId);
 
-    if (!fs.existsSync(sessionPath)) {
-      fs.mkdirSync(sessionPath, { recursive: true });
-    }
-
-    const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
-    const { version } = await fetchLatestBaileysVersion();
-
-    const sock = makeWASocket({
-      version,
-      printQRInTerminal: false,
-      auth: {
-        creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
-      },
-      logger,
-      generateHighQualityLinkPreview: true,
-      getMessage: async () => undefined,
-    });
-
-    const session = {
-      sock,
-      sessionId,
-      numberId,
-      phoneNumber,
-      connected: false,
-      qrCode: null,
-    };
-
-    this.sessions.set(sessionId, session);
-
-    // Handle connection events
-    sock.ev.on('connection.update', async (update) => {
-      await this.handleConnectionUpdate(sessionId, update);
-    });
-
-    // Handle credentials update
-    sock.ev.on('creds.update', saveCreds);
-
-    // Handle messages
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-      if (type === 'notify') {
-        for (const msg of messages) {
-          await this.handleIncomingMessage(sessionId, msg);
-        }
+      // Créer le dossier s'il n'existe pas
+      if (!fs.existsSync(sessionPath)) {
+        fs.mkdirSync(sessionPath, { recursive: true });
       }
-    });
 
-    return session;
+      const { state, saveCreds } = await useMultiFileAuthState(sessionPath);
+      const { version } = await fetchLatestBaileysVersion();
+
+      logger.info(`Using Baileys version: ${version.join('.')}`);
+
+      const sock = makeWASocket({
+        version,
+        printQRInTerminal: false,
+        auth: {
+          creds: state.creds,
+          keys: makeCacheableSignalKeyStore(state.keys, logger),
+        },
+        logger,
+        generateHighQualityLinkPreview: true,
+        getMessage: async () => undefined,
+        // ✅ Options pour éviter l'erreur 515
+        browser: ['WhatsApp Pool', 'Chrome', '121.0.0'],
+        syncFullHistory: false,
+        markOnlineOnConnect: false,
+        // ✅ Important pour la stabilité
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        keepAliveIntervalMs: 30000,
+        emitOwnEvents: false,
+        fireInitQueries: true,
+        qrTimeout: 60000,
+      });
+
+      const session = {
+        sock,
+        sessionId,
+        numberId,
+        phoneNumber,
+        connected: false,
+        qrCode: null,
+      };
+
+      this.sessions.set(sessionId, session);
+
+      // Handle connection events
+      sock.ev.on('connection.update', async (update) => {
+        await this.handleConnectionUpdate(sessionId, update);
+      });
+
+      // Handle credentials update
+      sock.ev.on('creds.update', saveCreds);
+
+      // Handle messages
+      sock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type === 'notify') {
+          for (const msg of messages) {
+            await this.handleIncomingMessage(sessionId, msg);
+          }
+        }
+      });
+
+      logger.info(`Session ${sessionId} initialized successfully`);
+      return session;
+
+    } catch (error) {
+      logger.error('Failed to create session:', {
+        sessionId,
+        error: error.message,
+        stack: error.stack
+      });
+      throw error;
+    }
   }
 
   async handleConnectionUpdate(sessionId, update) {
@@ -95,9 +116,7 @@ class SessionManager {
 
     const { connection, lastDisconnect, qr } = update;
 
-    // -----------------------------------------------------
-    // 🔹 1. Gestion du QR CODE
-    // -----------------------------------------------------
+    // QR Code généré
     if (qr) {
       logger.info(`QR Code generated for ${sessionId}`);
       qrcode.generate(qr, { small: true });
@@ -115,139 +134,113 @@ class SessionManager {
           qrCode: qrCodeBase64,
           timestamp: Date.now(),
         });
+
+        logger.info(`QR Code sent to backend for number ${session.numberId}`);
       } catch (error) {
         logger.error('QR conversion error:', error);
-        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-          action: 'qr_generated',
-          numberId: session.numberId,
-          sessionId,
-          qrCode: qr,
-          timestamp: Date.now(),
-        });
       }
     }
 
-    // -----------------------------------------------------
-    // 🔹 2. Connection fermée
-    // -----------------------------------------------------
-    // if (connection === 'close') {
-    //   const statusCode = lastDisconnect?.error?.output?.statusCode;
-    //   const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
-
-    //   logger.warn(
-    //     `Connection closed for ${sessionId}. Code: ${statusCode} - ${errorMessage}`
-    //   );
-
-    //   // ----------------------------
-    //   // ❌ Déconnecté définitivement
-    //   // ----------------------------
-    //   if (statusCode === DisconnectReason.loggedOut) {
-    //     logger.error(`User logged out for ${sessionId}.`);
-
-    //     this.sessions.delete(sessionId);
-    //     this.qrRetryAttempts.delete(session.numberId);
-
-    //     await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-    //       action: 'disconnected',
-    //       reason: 'logged_out',
-    //       sessionId,
-    //       numberId: session.numberId,
-    //       timestamp: Date.now(),
-    //     });
-
-    //     await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
-    //       numberId: session.numberId,
-    //       status: 'BANNED',
-    //       reason: 'Logged out from WhatsApp',
-    //     });
-
-    //     return;
-    //   }
-
-    //   // ----------------------------
-    //   // ⏳ QR EXPIRED / 3 essais max
-    //   // ----------------------------
-    //   if (errorMessage.includes('QR refs attempts ended')) {
-    //     const attempts = this.qrRetryAttempts.get(session.numberId) || 0;
-
-    //     if (attempts < this.maxQrRetries) {
-    //       this.qrRetryAttempts.set(session.numberId, attempts + 1);
-
-    //       logger.info(
-    //         `Regenerating QR for ${sessionId} (${attempts + 1}/${this.maxQrRetries})`
-    //       );
-
-    //       this.sessions.delete(sessionId);
-
-    //       await this.createSession(session.numberId, session.phoneNumber);
-
-    //       await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-    //         action: 'qr_regenerating',
-    //         attempt: attempts + 1,
-    //         maxAttempts: this.maxQrRetries,
-    //         numberId: session.numberId,
-    //         sessionId,
-    //         timestamp: Date.now(),
-    //       });
-
-    //       return;
-    //     }
-
-    //     logger.error(`Max QR retries reached for ${sessionId}.`);
-
-    //     this.sessions.delete(sessionId);
-    //     this.qrRetryAttempts.delete(session.numberId);
-
-    //     await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-    //       action: 'error',
-    //       numberId: session.numberId,
-    //       sessionId,
-    //       error: 'Max QR attempts reached',
-    //       timestamp: Date.now(),
-    //     });
-
-    //     return;
-    //   }
-
-    //   // ----------------------------
-    //   // 🔄 Crash normal → Reconnexion
-    //   // ----------------------------
-    //   logger.info(`Reconnect attempt for ${sessionId} in 2 seconds...`);
-    //   await new Promise((r) => setTimeout(r, 2000));
-
-    //   this.sessions.delete(sessionId);
-    //   await this.createSession(session.numberId, session.phoneNumber);
-
-    //   return;
-    // }
-
-
+    // Connexion fermée
     if (connection === 'close') {
-
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
 
-      if (shouldReconnect) {
-        logger.warn(`Restart required for ${sessionId}, reconnecting...`);
-        await new Promise(r => setTimeout(r, 1500));
+      logger.warn(`Connection closed for ${sessionId}. Code: ${statusCode} - ${errorMessage}`);
 
-        // Reconnect WITHOUT deleting session folder
+      // Logged out définitivement
+      if (statusCode === DisconnectReason.loggedOut) {
+        logger.error(`User logged out for ${sessionId}`);
+
         this.sessions.delete(sessionId);
+        this.qrRetryAttempts.delete(session.numberId);
+
+        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+          action: 'disconnected',
+          reason: 'logged_out',
+          sessionId,
+          numberId: session.numberId,
+          timestamp: Date.now(),
+        });
+
+        await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
+          numberId: session.numberId,
+          status: 'BANNED',
+          reason: 'Logged out from WhatsApp',
+        });
+
+        return;
+      }
+
+      // Erreur 515 - Stream Error (besoin de nettoyer)
+      if (statusCode === 515 || errorMessage.includes('Stream Errored')) {
+        logger.error(`Error 515 detected for ${sessionId}. Cleaning session...`);
+
+        // Supprimer la session
+        this.sessions.delete(sessionId);
+
+        // Nettoyer les fichiers de session
+        const sessionPath = path.join(this.sessionDir, sessionId);
+        try {
+          if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            logger.info(`Session files deleted: ${sessionPath}`);
+          }
+        } catch (err) {
+          logger.error(`Error deleting session folder: ${err.message}`);
+        }
+
+        // Notifier le backend
+        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+          action: 'error',
+          numberId: session.numberId,
+          sessionId,
+          error: 'Connection failed (Error 515). Session cleaned. Please request a new QR code after 2 minutes.',
+          errorCode: 515,
+          timestamp: Date.now(),
+        });
+
+        return;
+      }
+
+      // Conflit de session
+      if (statusCode === DisconnectReason.conflict) {
+        logger.warn(`Session conflict detected for ${sessionId}. Resetting...`);
+
+        const sessionPath = path.join(this.sessionDir, sessionId);
+        try {
+          if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+          }
+        } catch (err) {
+          logger.error(`Error deleting conflicted session: ${err.message}`);
+        }
+
+        this.sessions.delete(sessionId);
+
+        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+          action: 'session_conflict',
+          numberId: session.numberId,
+          sessionId,
+          timestamp: Date.now(),
+        });
+
+        // Attendre un peu avant de recréer
+        await new Promise(r => setTimeout(r, 2000));
         return this.createSession(session.numberId, session.phoneNumber);
       }
 
-      logger.error(`User logged out for ${sessionId}`);
+      // Autres erreurs - Reconnexion automatique
+      logger.info(`Reconnecting ${sessionId} in 2 seconds...`);
+      await new Promise(r => setTimeout(r, 2000));
+
       this.sessions.delete(sessionId);
-      this.qrRetryAttempts.delete(session.numberId);
-      return;
+      return this.createSession(session.numberId, session.phoneNumber);
     }
 
-
-    // -----------------------------------------------------
-    // 🔹 3. Connection OK
-    // -----------------------------------------------------
+    // Connexion ouverte avec succès
     if (connection === 'open') {
-      logger.info(`Session ${sessionId} connected successfully.`);
+      logger.info(`✅ Session ${sessionId} connected successfully!`);
 
       session.connected = true;
       session.qrCode = null;
@@ -265,41 +258,7 @@ class SessionManager {
         status: 'HEALTHY',
       });
     }
-
-    // ----------------------------
-    // ⚠️  CONFLIT DE SESSION
-    // ----------------------------
-    if (statusCode === DisconnectReason.conflict) {
-      logger.warn(`⚠️ Session conflict detected for ${sessionId}. Resetting session folder...`);
-
-      // delete session folder
-      try {
-        fs.rmSync(path.join(this.sessionDir, sessionId), {
-          recursive: true,
-          force: true,
-        });
-        logger.info(`Session folder deleted for ${sessionId}`);
-      } catch (err) {
-        logger.error(`Error deleting session folder for ${sessionId}:`, err);
-      }
-
-      // remove from memory
-      this.sessions.delete(sessionId);
-
-      // notify via RabbitMQ
-      await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-        action: 'session_conflict',
-        numberId: session.numberId,
-        sessionId,
-        timestamp: Date.now(),
-      });
-
-      // recreate clean session
-      return this.createSession(session.numberId, session.phoneNumber);
-    }
-
   }
-
 
   async handleIncomingMessage(sessionId, message) {
     const session = this.sessions.get(sessionId);
@@ -317,7 +276,6 @@ class SessionManager {
 
       logger.info(`Incoming message for ${sessionId} from ${message.key.remoteJid}`);
 
-      // Forward to backend
       await rabbitmq.publish(config.rabbitmq.queues.messageReceive, messageData);
     } catch (error) {
       logger.error('Error handling incoming message:', error);
@@ -407,7 +365,10 @@ class SessionManager {
     try {
       await session.sock.logout();
     } catch (error) {
-      logger.error(`Error closing session ${sessionId}:`, error);
+      // Ignore "Intentional Logout" - c'est normal
+      if (error.message !== 'Intentional Logout') {
+        logger.error(`Error closing session ${sessionId}:`, error);
+      }
     }
 
     this.sessions.delete(sessionId);
@@ -430,7 +391,6 @@ class SessionManager {
     }));
   }
 
-  // Réinitialiser le compteur de tentatives QR pour un numéro spécifique
   resetQrRetries(numberId) {
     this.qrRetryAttempts.delete(numberId);
     logger.info(`QR retry counter reset for number ${numberId}`);
