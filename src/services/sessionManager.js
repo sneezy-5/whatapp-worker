@@ -1,22 +1,18 @@
-import pkg from '@whiskeysockets/baileys';
-const {
-  default: makeWASocket,
+import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
-} = pkg;
+} from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import fs from 'fs';
 import path from 'path';
-// import crypto from 'crypto';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
 import rabbitmq from '../services/rabbitMQService.js';
 
-// Make crypto globally available for Baileys
-// global.crypto = crypto;
+// Note: crypto is globally available in Node.js 22+
 
 class SessionManager {
   constructor() {
