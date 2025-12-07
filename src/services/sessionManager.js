@@ -130,96 +130,118 @@ class SessionManager {
     // -----------------------------------------------------
     // 🔹 2. Connection fermée
     // -----------------------------------------------------
+    // if (connection === 'close') {
+    //   const statusCode = lastDisconnect?.error?.output?.statusCode;
+    //   const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
+
+    //   logger.warn(
+    //     `Connection closed for ${sessionId}. Code: ${statusCode} - ${errorMessage}`
+    //   );
+
+    //   // ----------------------------
+    //   // ❌ Déconnecté définitivement
+    //   // ----------------------------
+    //   if (statusCode === DisconnectReason.loggedOut) {
+    //     logger.error(`User logged out for ${sessionId}.`);
+
+    //     this.sessions.delete(sessionId);
+    //     this.qrRetryAttempts.delete(session.numberId);
+
+    //     await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+    //       action: 'disconnected',
+    //       reason: 'logged_out',
+    //       sessionId,
+    //       numberId: session.numberId,
+    //       timestamp: Date.now(),
+    //     });
+
+    //     await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
+    //       numberId: session.numberId,
+    //       status: 'BANNED',
+    //       reason: 'Logged out from WhatsApp',
+    //     });
+
+    //     return;
+    //   }
+
+    //   // ----------------------------
+    //   // ⏳ QR EXPIRED / 3 essais max
+    //   // ----------------------------
+    //   if (errorMessage.includes('QR refs attempts ended')) {
+    //     const attempts = this.qrRetryAttempts.get(session.numberId) || 0;
+
+    //     if (attempts < this.maxQrRetries) {
+    //       this.qrRetryAttempts.set(session.numberId, attempts + 1);
+
+    //       logger.info(
+    //         `Regenerating QR for ${sessionId} (${attempts + 1}/${this.maxQrRetries})`
+    //       );
+
+    //       this.sessions.delete(sessionId);
+
+    //       await this.createSession(session.numberId, session.phoneNumber);
+
+    //       await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+    //         action: 'qr_regenerating',
+    //         attempt: attempts + 1,
+    //         maxAttempts: this.maxQrRetries,
+    //         numberId: session.numberId,
+    //         sessionId,
+    //         timestamp: Date.now(),
+    //       });
+
+    //       return;
+    //     }
+
+    //     logger.error(`Max QR retries reached for ${sessionId}.`);
+
+    //     this.sessions.delete(sessionId);
+    //     this.qrRetryAttempts.delete(session.numberId);
+
+    //     await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+    //       action: 'error',
+    //       numberId: session.numberId,
+    //       sessionId,
+    //       error: 'Max QR attempts reached',
+    //       timestamp: Date.now(),
+    //     });
+
+    //     return;
+    //   }
+
+    //   // ----------------------------
+    //   // 🔄 Crash normal → Reconnexion
+    //   // ----------------------------
+    //   logger.info(`Reconnect attempt for ${sessionId} in 2 seconds...`);
+    //   await new Promise((r) => setTimeout(r, 2000));
+
+    //   this.sessions.delete(sessionId);
+    //   await this.createSession(session.numberId, session.phoneNumber);
+
+    //   return;
+    // }
+
+
     if (connection === 'close') {
+
       const statusCode = lastDisconnect?.error?.output?.statusCode;
-      const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-      logger.warn(
-        `Connection closed for ${sessionId}. Code: ${statusCode} - ${errorMessage}`
-      );
+      if (shouldReconnect) {
+        logger.warn(`Restart required for ${sessionId}, reconnecting...`);
+        await new Promise(r => setTimeout(r, 1500));
 
-      // ----------------------------
-      // ❌ Déconnecté définitivement
-      // ----------------------------
-      if (statusCode === DisconnectReason.loggedOut) {
-        logger.error(`User logged out for ${sessionId}.`);
-
+        // Reconnect WITHOUT deleting session folder
         this.sessions.delete(sessionId);
-        this.qrRetryAttempts.delete(session.numberId);
-
-        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-          action: 'disconnected',
-          reason: 'logged_out',
-          sessionId,
-          numberId: session.numberId,
-          timestamp: Date.now(),
-        });
-
-        await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
-          numberId: session.numberId,
-          status: 'BANNED',
-          reason: 'Logged out from WhatsApp',
-        });
-
-        return;
+        return this.createSession(session.numberId, session.phoneNumber);
       }
 
-      // ----------------------------
-      // ⏳ QR EXPIRED / 3 essais max
-      // ----------------------------
-      if (errorMessage.includes('QR refs attempts ended')) {
-        const attempts = this.qrRetryAttempts.get(session.numberId) || 0;
-
-        if (attempts < this.maxQrRetries) {
-          this.qrRetryAttempts.set(session.numberId, attempts + 1);
-
-          logger.info(
-            `Regenerating QR for ${sessionId} (${attempts + 1}/${this.maxQrRetries})`
-          );
-
-          this.sessions.delete(sessionId);
-
-          await this.createSession(session.numberId, session.phoneNumber);
-
-          await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-            action: 'qr_regenerating',
-            attempt: attempts + 1,
-            maxAttempts: this.maxQrRetries,
-            numberId: session.numberId,
-            sessionId,
-            timestamp: Date.now(),
-          });
-
-          return;
-        }
-
-        logger.error(`Max QR retries reached for ${sessionId}.`);
-
-        this.sessions.delete(sessionId);
-        this.qrRetryAttempts.delete(session.numberId);
-
-        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-          action: 'error',
-          numberId: session.numberId,
-          sessionId,
-          error: 'Max QR attempts reached',
-          timestamp: Date.now(),
-        });
-
-        return;
-      }
-
-      // ----------------------------
-      // 🔄 Crash normal → Reconnexion
-      // ----------------------------
-      logger.info(`Reconnect attempt for ${sessionId} in 2 seconds...`);
-      await new Promise((r) => setTimeout(r, 2000));
-
+      logger.error(`User logged out for ${sessionId}`);
       this.sessions.delete(sessionId);
-      await this.createSession(session.numberId, session.phoneNumber);
-
+      this.qrRetryAttempts.delete(session.numberId);
       return;
     }
+
 
     // -----------------------------------------------------
     // 🔹 3. Connection OK
@@ -243,6 +265,39 @@ class SessionManager {
         status: 'HEALTHY',
       });
     }
+
+    // ----------------------------
+    // ⚠️  CONFLIT DE SESSION
+    // ----------------------------
+    if (statusCode === DisconnectReason.conflict) {
+      logger.warn(`⚠️ Session conflict detected for ${sessionId}. Resetting session folder...`);
+
+      // delete session folder
+      try {
+        fs.rmSync(path.join(this.sessionDir, sessionId), {
+          recursive: true,
+          force: true,
+        });
+        logger.info(`Session folder deleted for ${sessionId}`);
+      } catch (err) {
+        logger.error(`Error deleting session folder for ${sessionId}:`, err);
+      }
+
+      // remove from memory
+      this.sessions.delete(sessionId);
+
+      // notify via RabbitMQ
+      await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+        action: 'session_conflict',
+        numberId: session.numberId,
+        sessionId,
+        timestamp: Date.now(),
+      });
+
+      // recreate clean session
+      return this.createSession(session.numberId, session.phoneNumber);
+    }
+
   }
 
 
