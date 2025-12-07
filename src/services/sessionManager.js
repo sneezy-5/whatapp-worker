@@ -95,6 +95,9 @@ class SessionManager {
 
     const { connection, lastDisconnect, qr } = update;
 
+    // -----------------------------------------------------
+    // 🔹 1. Gestion du QR CODE
+    // -----------------------------------------------------
     if (qr) {
       logger.info(`QR Code generated for ${sessionId}`);
       qrcode.generate(qr, { small: true });
@@ -102,26 +105,18 @@ class SessionManager {
       session.qrCode = qr;
 
       try {
-        // Convertir le QR en base64
         const QRCode = await import('qrcode');
         const qrCodeBase64 = await QRCode.default.toDataURL(qr);
 
-        logger.info(`QR Code converted to base64 for ${sessionId}`);
-
-        // ✅ CORRIGÉ : Envoyer sur worker.events au lieu de session.update
         await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
           action: 'qr_generated',
           numberId: session.numberId,
           sessionId,
-          qrCode: qrCodeBase64,  // Format: data:image/png;base64,...
+          qrCode: qrCodeBase64,
           timestamp: Date.now(),
         });
-
-        logger.info(`QR Code sent to backend for number ${session.numberId}`);
       } catch (error) {
-        logger.error(`Error converting/sending QR code:`, error);
-
-        // Fallback: envoyer le QR brut si la conversion échoue
+        logger.error('QR conversion error:', error);
         await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
           action: 'qr_generated',
           numberId: session.numberId,
@@ -132,94 +127,110 @@ class SessionManager {
       }
     }
 
+    // -----------------------------------------------------
+    // 🔹 2. Connection fermée
+    // -----------------------------------------------------
     if (connection === 'close') {
-      const shouldReconnect =
-        (lastDisconnect?.error instanceof Boom)
-          ? lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
-          : true;
-
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
       const errorMessage = lastDisconnect?.error?.message || 'Unknown error';
 
-      logger.warn(`Connection closed for ${sessionId}. Reconnect: ${shouldReconnect}. Reason: ${errorMessage}`);
+      logger.warn(
+        `Connection closed for ${sessionId}. Code: ${statusCode} - ${errorMessage}`
+      );
 
-      if (shouldReconnect) {
-        // Vérifier si c'est une erreur de QR expiré
-        if (errorMessage.includes('QR refs attempts ended')) {
-          const currentAttempts = this.qrRetryAttempts.get(session.numberId) || 0;
+      // ----------------------------
+      // ❌ Déconnecté définitivement
+      // ----------------------------
+      if (statusCode === DisconnectReason.loggedOut) {
+        logger.error(`User logged out for ${sessionId}.`);
 
-          logger.info(`QR code expired for ${sessionId}. Attempt ${currentAttempts + 1}/${this.maxQrRetries}`);
-
-          if (currentAttempts < this.maxQrRetries) {
-            // ✅ RÉGÉNÉRER LE QR CODE
-            this.qrRetryAttempts.set(session.numberId, currentAttempts + 1);
-
-            logger.info(`Regenerating QR code for ${sessionId} (attempt ${currentAttempts + 1}/${this.maxQrRetries})...`);
-
-            // Supprimer l'ancienne session
-            this.sessions.delete(sessionId);
-
-            // Recréer une nouvelle session (qui générera un nouveau QR)
-            await this.createSession(session.numberId, session.phoneNumber);
-
-            // Notifier le backend qu'un nouveau QR est en cours de génération
-            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-              action: 'qr_regenerating',
-              numberId: session.numberId,
-              sessionId,
-              attempt: currentAttempts + 1,
-              maxAttempts: this.maxQrRetries,
-              message: `QR code expired. Generating new QR code (attempt ${currentAttempts + 1}/${this.maxQrRetries})`,
-              timestamp: Date.now(),
-            });
-          } else {
-            // ❌ NOMBRE MAX DE TENTATIVES ATTEINT
-            logger.error(`Max QR retry attempts (${this.maxQrRetries}) reached for ${sessionId}. Giving up.`);
-
-            this.sessions.delete(sessionId);
-            this.qrRetryAttempts.delete(session.numberId); // Reset counter
-
-            // Notifier le backend que toutes les tentatives ont échoué
-            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-              action: 'error',
-              numberId: session.numberId,
-              sessionId,
-              error: `QR code generation failed after ${this.maxQrRetries} attempts. Please request a new validation.`,
-              timestamp: Date.now(),
-            });
-          }
-        } else {
-          // Autres erreurs - tenter la reconnexion
-          logger.info(`Attempting to reconnect ${sessionId}...`);
-          await this.createSession(session.numberId, session.phoneNumber);
-        }
-      } else {
         this.sessions.delete(sessionId);
+        this.qrRetryAttempts.delete(session.numberId);
 
-        // ✅ CORRIGÉ : Envoyer disconnected sur worker.events
         await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
           action: 'disconnected',
-          numberId: session.numberId,
+          reason: 'logged_out',
           sessionId,
-          reason: 'Logged out from WhatsApp',
+          numberId: session.numberId,
           timestamp: Date.now(),
         });
 
-        // Toujours envoyer le statut de santé
         await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
           numberId: session.numberId,
           status: 'BANNED',
           reason: 'Logged out from WhatsApp',
         });
+
+        return;
       }
-    } else if (connection === 'open') {
-      logger.info(`Session ${sessionId} connected successfully`);
+
+      // ----------------------------
+      // ⏳ QR EXPIRED / 3 essais max
+      // ----------------------------
+      if (errorMessage.includes('QR refs attempts ended')) {
+        const attempts = this.qrRetryAttempts.get(session.numberId) || 0;
+
+        if (attempts < this.maxQrRetries) {
+          this.qrRetryAttempts.set(session.numberId, attempts + 1);
+
+          logger.info(
+            `Regenerating QR for ${sessionId} (${attempts + 1}/${this.maxQrRetries})`
+          );
+
+          this.sessions.delete(sessionId);
+
+          await this.createSession(session.numberId, session.phoneNumber);
+
+          await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+            action: 'qr_regenerating',
+            attempt: attempts + 1,
+            maxAttempts: this.maxQrRetries,
+            numberId: session.numberId,
+            sessionId,
+            timestamp: Date.now(),
+          });
+
+          return;
+        }
+
+        logger.error(`Max QR retries reached for ${sessionId}.`);
+
+        this.sessions.delete(sessionId);
+        this.qrRetryAttempts.delete(session.numberId);
+
+        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+          action: 'error',
+          numberId: session.numberId,
+          sessionId,
+          error: 'Max QR attempts reached',
+          timestamp: Date.now(),
+        });
+
+        return;
+      }
+
+      // ----------------------------
+      // 🔄 Crash normal → Reconnexion
+      // ----------------------------
+      logger.info(`Reconnect attempt for ${sessionId} in 2 seconds...`);
+      await new Promise((r) => setTimeout(r, 2000));
+
+      this.sessions.delete(sessionId);
+      await this.createSession(session.numberId, session.phoneNumber);
+
+      return;
+    }
+
+    // -----------------------------------------------------
+    // 🔹 3. Connection OK
+    // -----------------------------------------------------
+    if (connection === 'open') {
+      logger.info(`Session ${sessionId} connected successfully.`);
+
       session.connected = true;
       session.qrCode = null;
-
-      // ✅ Réinitialiser le compteur de tentatives QR (connexion réussie)
       this.qrRetryAttempts.delete(session.numberId);
 
-      // ✅ CORRIGÉ : Notifier via worker.events
       await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
         action: 'connected',
         numberId: session.numberId,
@@ -227,13 +238,13 @@ class SessionManager {
         timestamp: Date.now(),
       });
 
-      // Toujours envoyer le statut de santé
       await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
         numberId: session.numberId,
         status: 'HEALTHY',
       });
     }
   }
+
 
   async handleIncomingMessage(sessionId, message) {
     const session = this.sessions.get(sessionId);
