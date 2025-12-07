@@ -4,6 +4,60 @@ import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
 
 class MessageHandler {
+
+  /**
+   * Format Ivory Coast numbers to handle old format (8 digits) vs new format (10 digits)
+   * In 2021, Ivory Coast migrated from 8 digits to 10 digits by adding prefixes:
+   * - 01, 02, 03 for Moov
+   * - 05 for MTN
+   * - 07 for Orange
+   * 
+   * This function returns all possible formats to try
+   */
+  getIvoryCoastNumberVariants(phoneNumber) {
+    const cleaned = phoneNumber.replace(/[^0-9]/g, '');
+    const variants = [];
+
+    // Check if it's an Ivory Coast number (starts with 225)
+    if (!cleaned.startsWith('225')) {
+      return [cleaned]; // Not Ivory Coast, return as-is
+    }
+
+    const withoutCountryCode = cleaned.substring(3); // Remove 225
+
+    // New format: 225 + 10 digits (e.g., 2250709865432)
+    if (withoutCountryCode.length === 10) {
+      // Already in new format, but also try without the prefix
+      variants.push(cleaned);
+
+      // Also try without the new prefix (old format)
+      if (withoutCountryCode.startsWith('01') ||
+        withoutCountryCode.startsWith('05') ||
+        withoutCountryCode.startsWith('07')) {
+        const oldFormat = '225' + withoutCountryCode.substring(2);
+        variants.push(oldFormat);
+      }
+    }
+    // Old format: 225 + 8 digits (e.g., 22509865432)
+    else if (withoutCountryCode.length === 8) {
+      // Original old format
+      variants.push(cleaned);
+
+      // Try with new prefixes (01, 05, 07)
+      const prefixes = ['07', '05', '01']; // Most common first
+      for (const prefix of prefixes) {
+        variants.push('225' + prefix + withoutCountryCode);
+      }
+    }
+    else {
+      // Unknown format, return as-is
+      variants.push(cleaned);
+    }
+
+    logger.info(`[IVORY COAST] Number variants for ${phoneNumber}: ${variants.join(', ')}`);
+    return variants;
+  }
+
   async handleSendMessage(data) {
     const { messageId, recipientNumber, content, type, whatsappNumberId, mediaUrl } = data;
 
@@ -35,19 +89,49 @@ class MessageHandler {
 
       logger.info(`[MESSAGE HANDLER] Session is connected and ready`);
 
-      // Format recipient number for whatsapp-web.js (uses @c.us)
-      let formattedRecipient = recipientNumber.replace(/[^0-9]/g, '');
-      // whatsapp-web.js uses @c.us for individual chats
-      formattedRecipient = formattedRecipient + '@c.us';
+      // Get all number variants (for Ivory Coast old/new format handling)
+      const numberVariants = this.getIvoryCoastNumberVariants(recipientNumber);
 
-      // Send the message
-      const result = await sessionManager.sendMessage(
-        numberId,  // Use converted numberId
-        formattedRecipient,
-        content,
-        type,
-        mediaUrl
-      );
+      let result = null;
+      let lastError = null;
+      let successfulNumber = null;
+
+      // Try each variant until one works
+      for (const variant of numberVariants) {
+        const formattedRecipient = variant + '@c.us';
+
+        try {
+          logger.info(`[MESSAGE HANDLER] Trying to send to: ${formattedRecipient}`);
+
+          result = await sessionManager.sendMessage(
+            numberId,
+            formattedRecipient,
+            content,
+            type,
+            mediaUrl
+          );
+
+          successfulNumber = formattedRecipient;
+          logger.info(`[MESSAGE HANDLER] ✅ Message sent successfully to ${formattedRecipient}`);
+          break; // Success, exit loop
+
+        } catch (error) {
+          logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${error.message}`);
+          lastError = error;
+
+          // If it's not a "not registered" error, don't try other variants
+          if (!error.message.includes('not registered') &&
+            !error.message.includes('No LID for user') &&
+            !error.code === 'INVALID_RECIPIENT') {
+            throw error;
+          }
+        }
+      }
+
+      // If no variant worked, throw the last error
+      if (!result) {
+        throw lastError || new Error(`Failed to send message to any number variant`);
+      }
 
       // Send success response to backend
       await rabbitmq.publish(config.rabbitmq.queues.messageReceive, {
