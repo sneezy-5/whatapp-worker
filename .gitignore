@@ -12,6 +12,11 @@ yarn.lock
 sessions/
 *.session
 
+# whatsapp-web.js auth storage
+.wwebjs_auth/
+.wwebjs_cache/
+test-session/
+
 # Logs
 logs/
 *.log

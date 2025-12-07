@@ -40,26 +40,32 @@ class HealthHandler {
 
       if (!connected) {
         logger.warn(`Session ${sessionId} is not connected`);
-        
+
         await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
           numberId,
           status: 'DISCONNECTED',
           reason: 'Session not connected',
         });
-        
+
         return;
       }
 
       // Send ping to verify connection
       const sessionObj = sessionManager.getSession(numberId);
-      
-      if (!sessionObj || !sessionObj.sock) {
+
+      if (!sessionObj || !sessionObj.client) {
         throw new Error('Session object not found');
       }
 
-      // Check if socket is still open
-      if (sessionObj.sock.ws.readyState !== 1) { // 1 = OPEN
-        throw new Error('WebSocket not open');
+      // Check if client is ready (whatsapp-web.js specific)
+      if (!sessionObj.isReady) {
+        throw new Error('Client not ready');
+      }
+
+      // Verify the client state
+      const state = await sessionObj.client.getState();
+      if (state !== 'CONNECTED') {
+        throw new Error(`Client state is ${state}`);
       }
 
       // If everything is okay, report healthy
@@ -72,7 +78,7 @@ class HealthHandler {
       logger.debug(`Health check passed for session ${sessionId}`);
     } catch (error) {
       logger.error(`Health check failed for session ${session.sessionId}:`, error);
-      
+
       await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
         numberId: session.numberId,
         status: 'UNHEALTHY',
@@ -106,7 +112,7 @@ class HealthHandler {
 
   getWorkerStatus() {
     const sessions = sessionManager.getActiveSessions();
-    
+
     return {
       workerId: config.worker.id,
       workerName: config.worker.name,
@@ -121,9 +127,9 @@ class HealthHandler {
 
   async reportWorkerStatus() {
     const status = this.getWorkerStatus();
-    
+
     logger.debug('Worker status:', status);
-    
+
     await rabbitmq.publish(config.rabbitmq.queues.sessionUpdate, {
       action: 'worker_status',
       data: status,

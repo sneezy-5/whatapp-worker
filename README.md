@@ -1,10 +1,12 @@
-# WhatsApp Worker - Baileys
+# WhatsApp Worker - whatsapp-web.js
 
-Worker Node.js avec Baileys pour gérer les connexions WhatsApp et l'envoi de messages.
+Worker Node.js avec **whatsapp-web.js** pour gérer les connexions WhatsApp et l'envoi de messages.
+
+> ⚠️ **Migration depuis Baileys** : Ce projet a été migré de Baileys vers whatsapp-web.js. Voir [MIGRATION.md](./MIGRATION.md) pour les détails.
 
 ## 🚀 Fonctionnalités
 
-- ✅ Connexion WhatsApp via Baileys (multi-device)
+- ✅ Connexion WhatsApp via whatsapp-web.js (client web officiel)
 - ✅ Support QR Code pour authentification
 - ✅ Envoi de messages (texte, image, vidéo, document, audio)
 - ✅ Réception de messages en temps réel
@@ -13,12 +15,14 @@ Worker Node.js avec Baileys pour gérer les connexions WhatsApp et l'envoi de me
 - ✅ Reconnexion automatique
 - ✅ Communication RabbitMQ avec le backend
 - ✅ Logs structurés avec Pino
+- ✅ Support Docker avec Chromium
 
 ## 📋 Prérequis
 
 - Node.js 18+
 - RabbitMQ
 - Backend Java (pour recevoir les commandes)
+- **Chromium** (installé automatiquement par whatsapp-web.js)
 
 ## 🛠️ Installation
 
@@ -44,7 +48,7 @@ cp .env.example .env
 Éditer `.env` :
 
 ```env
-WORKER_ID=worker-1
+WORKER_ID=1
 WORKER_NAME="WhatsApp Worker 1"
 
 RABBITMQ_URL=amqp://guest:guest@localhost:5672
@@ -62,6 +66,9 @@ npm run dev
 
 # Production
 npm start
+
+# Test whatsapp-web.js
+npm run test:whatsapp
 ```
 
 ## 📁 Structure du Projet
@@ -72,18 +79,23 @@ whatsapp-worker/
 │   ├── config/
 │   │   └── config.js              # Configuration centralisée
 │   ├── services/
-│   │   ├── rabbitmq.js            # Service RabbitMQ
-│   │   └── sessionManager.js     # Gestion des sessions Baileys
-│   ├── handlers/
-│   │   ├── messageHandler.js     # Handler messages
-│   │   └── healthHandler.js      # Handler health checks
+│   │   ├── rabbitMQService.js     # Service RabbitMQ
+│   │   └── sessionManager.js      # Gestion des sessions whatsapp-web.js
+│   ├── handles/
+│   │   ├── MessageHandler.js      # Handler messages
+│   │   └── HealthHandler.js       # Handler health checks
 │   ├── utils/
 │   │   └── logger.js              # Logger Pino
 │   └── worker.js                  # Point d'entrée
 ├── sessions/                      # Sessions WhatsApp (auth data)
+├── .wwebjs_auth/                  # Authentification whatsapp-web.js
+├── test-whatsapp.js               # Script de test
+├── cleanup-sessions.js            # Script de nettoyage
 ├── .env.example                   # Template variables env
 ├── package.json
 ├── Dockerfile
+├── MIGRATION.md                   # Documentation migration
+├── QUICKSTART.md                  # Guide démarrage rapide
 └── README.md
 ```
 
@@ -96,9 +108,9 @@ whatsapp-worker/
 {
   "messageId": 123,
   "whatsappNumberId": 1,
-  "recipientNumber": "+225XXXXXXXXX",
+  "recipientNumber": "225XXXXXXXXX",
   "content": "Hello!",
-  "type": "TEXT",
+  "type": "text",
   "mediaUrl": null
 }
 ```
@@ -108,7 +120,7 @@ whatsapp-worker/
 {
   "action": "health_check",
   "numberId": 1,
-  "workerId": "worker-1"
+  "workerId": 1
 }
 ```
 
@@ -116,38 +128,51 @@ whatsapp-worker/
 ```json
 {
   "action": "create",
-  "numberId": 1,
-  "phoneNumber": "+225XXXXXXXXX"
+  "data": {
+    "numberId": 1,
+    "phoneNumber": "225XXXXXXXXX",
+    "workerId": 1
+  }
 }
 ```
+
+Actions disponibles : `create`, `close`, `reconnect`, `regenerate_qr`
 
 ### Queues Publiées
 
-**1. `whatsapp.message.receive`** - Statuts messages
+**1. `whatsapp.worker.events`** - Événements worker
 ```json
 {
-  "messageId": 123,
-  "status": "SENT",
-  "whatsappMessageId": "3EB0XXXXX",
+  "action": "qr_generated",
+  "numberId": 1,
+  "sessionId": "session_1_225XXXXX",
+  "qrCode": "data:image/png;base64,...",
   "timestamp": 1234567890
 }
 ```
+
+Actions : `qr_generated`, `connected`, `disconnected`, `error`
 
 **2. `whatsapp.number.health`** - Statuts numéros
 ```json
 {
   "numberId": 1,
   "status": "HEALTHY",
-  "workerId": "worker-1"
+  "workerId": 1
 }
 ```
 
-**3. `whatsapp.session.update`** - Updates sessions
+Statuts : `HEALTHY`, `UNHEALTHY`, `DISCONNECTED`, `NOT_FOUND`, `BANNED`
+
+**3. `whatsapp.message.receive`** - Messages reçus
 ```json
 {
-  "sessionId": "session_1_+225XXXXX",
+  "sessionId": "session_1_225XXXXX",
   "numberId": 1,
-  "action": "connected"
+  "messageId": "3EB0XXXXX",
+  "from": "225YYYYY@c.us",
+  "body": "Hello!",
+  "timestamp": 1234567890
 }
 ```
 
@@ -155,23 +180,26 @@ whatsapp-worker/
 
 ### Première Connexion
 
-1. Démarrer le worker
-2. Un QR Code sera affiché dans le terminal
-3. Scanner le QR Code avec WhatsApp sur votre téléphone
-4. La session sera sauvegardée dans `sessions/`
+1. Démarrer le worker : `npm start`
+2. Envoyer un message `create` via RabbitMQ
+3. Un QR Code sera généré et envoyé au backend
+4. Scanner le QR Code avec WhatsApp sur votre téléphone
+5. La session sera sauvegardée dans `.wwebjs_auth/`
 
 ### Sessions Multiples
 
 Chaque numéro WhatsApp a sa propre session :
 
 ```
-sessions/
-├── session_1_+225XXXXX/
-│   ├── creds.json
-│   └── app-state-sync-*.json
-├── session_2_+225YYYYY/
-│   ├── creds.json
-│   └── app-state-sync-*.json
+.wwebjs_auth/
+├── session-session_1_225XXXXX/
+│   └── Default/
+│       ├── IndexedDB/
+│       └── Local Storage/
+├── session-session_2_225YYYYY/
+    └── Default/
+        ├── IndexedDB/
+        └── Local Storage/
 ```
 
 ## 💬 Types de Messages Supportés
@@ -179,7 +207,7 @@ sessions/
 ### Texte
 ```javascript
 {
-  "type": "TEXT",
+  "type": "text",
   "content": "Bonjour!",
   "mediaUrl": null
 }
@@ -188,7 +216,7 @@ sessions/
 ### Image
 ```javascript
 {
-  "type": "IMAGE",
+  "type": "image",
   "content": "Légende de l'image",
   "mediaUrl": "https://example.com/image.jpg"
 }
@@ -197,7 +225,7 @@ sessions/
 ### Vidéo
 ```javascript
 {
-  "type": "VIDEO",
+  "type": "video",
   "content": "Légende de la vidéo",
   "mediaUrl": "https://example.com/video.mp4"
 }
@@ -206,7 +234,7 @@ sessions/
 ### Document
 ```javascript
 {
-  "type": "DOCUMENT",
+  "type": "document",
   "content": "document.pdf",
   "mediaUrl": "https://example.com/doc.pdf"
 }
@@ -215,7 +243,7 @@ sessions/
 ### Audio
 ```javascript
 {
-  "type": "AUDIO",
+  "type": "audio",
   "content": "",
   "mediaUrl": "https://example.com/audio.mp3"
 }
@@ -226,7 +254,7 @@ sessions/
 Le worker effectue des health checks automatiques toutes les minutes :
 
 - Vérifie que les sessions sont connectées
-- Teste la connexion WebSocket
+- Teste l'état du client WhatsApp
 - Rapporte l'état au backend
 - Tente la reconnexion si nécessaire
 
@@ -235,32 +263,30 @@ Le worker effectue des health checks automatiques toutes les minutes :
 ### Construire l'Image
 
 ```bash
-docker build -t whatsapp-worker .
+docker build -t whatsapp-worker:latest .
 ```
+
+**Note** : La construction prend plus de temps qu'avant (installation de Chromium)
 
 ### Lancer avec Docker Compose
 
 ```bash
-# Démarrer tous les workers
+# Démarrer le worker
 docker-compose up -d
 
 # Voir les logs
-docker-compose logs -f worker-1
+docker-compose logs -f worker
 
 # Arrêter
 docker-compose down
 ```
 
-### Lancer Manuellement
+### Configuration Docker
 
-```bash
-docker run -d \
-  --name whatsapp-worker-1 \
-  -e WORKER_ID=worker-1 \
-  -e RABBITMQ_URL=amqp://guest:guest@rabbitmq:5672 \
-  -v $(pwd)/sessions:/app/sessions \
-  whatsapp-worker
-```
+Le `docker-compose.yaml` inclut :
+- `shm_size: '2gb'` - Requis pour Chromium
+- Volume `worker_auth` - Stockage des sessions
+- Volume `worker_sessions` - Données de session
 
 ## 📊 Logs
 
@@ -270,7 +296,7 @@ Les logs sont structurés avec Pino :
 {
   "level": "info",
   "time": 1234567890,
-  "msg": "Message sent successfully to +225XXXXX"
+  "msg": "Session session_1_225XXXXX is ready and connected"
 }
 ```
 
@@ -291,14 +317,24 @@ Le worker tente automatiquement de se reconnecter en cas de :
 - Timeout WhatsApp
 - Erreur temporaire
 
-### Numéro Banni
+### Numéro Banni/Déconnecté
 
-Si un numéro est banni par WhatsApp :
+Si un numéro est banni ou déconnecté :
 1. Le worker détecte la déconnexion
 2. Notifie le backend via `whatsapp.number.health`
-3. Le backend remplace automatiquement le numéro
+3. Le backend peut remplacer le numéro
 
 ## 🔧 Dépannage
+
+### Chromium ne démarre pas
+
+```bash
+# Linux
+sudo apt-get update
+sudo apt-get install -y chromium-browser
+
+# Le Dockerfile inclut déjà toutes les dépendances
+```
 
 ### QR Code ne s'affiche pas
 
@@ -313,19 +349,23 @@ curl http://localhost:15672
 ### Session ne se connecte pas
 
 ```bash
-# Supprimer la session et réessayer
-rm -rf sessions/session_*
+# Nettoyer les sessions
+npm run cleanup
+
+# Ou manuellement
+rm -rf sessions/*
+rm -rf .wwebjs_auth/*
+
+# Redémarrer
 npm start
 ```
 
-### Messages ne s'envoient pas
+### Erreur "Protocol error"
 
 ```bash
-# Vérifier RabbitMQ
-docker logs whatsapp-rabbitmq
-
-# Vérifier le worker
-docker logs whatsapp-worker-1
+# Augmenter la mémoire partagée (Docker)
+# Déjà configuré dans docker-compose.yaml
+shm_size: '2gb'
 ```
 
 ## 📈 Performance
@@ -338,14 +378,22 @@ docker logs whatsapp-worker-1
 
 ### Ressources
 
-- RAM : ~200MB par worker
-- CPU : Minimal (pics lors d'envoi de médias)
-- Stockage : ~50MB par session
+| Ressource | Baileys | whatsapp-web.js |
+|-----------|---------|-----------------|
+| RAM | ~150 MB | ~400 MB |
+| CPU (idle) | ~1% | ~2-3% |
+| Démarrage | ~3s | ~15s |
+| Stockage/session | ~5 MB | ~20 MB |
+
+**Recommandations** :
+- Minimum 2 GB RAM par worker
+- SSD recommandé pour les sessions
+- Surveiller l'utilisation mémoire
 
 ## 🔐 Sécurité
 
 ### Sessions
-- Les sessions sont stockées localement
+- Les sessions sont stockées dans `.wwebjs_auth/`
 - Ne jamais commiter les sessions dans Git
 - Sauvegarder régulièrement les sessions
 
@@ -354,14 +402,15 @@ docker logs whatsapp-worker-1
 - Utiliser des secrets pour la production
 - Changer les credentials par défaut
 
-## 📚 Baileys
+## 📚 whatsapp-web.js
 
-Ce worker utilise [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Baileys) :
+Ce worker utilise [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) :
 
-- Multi-device natif
-- Sans API officielle WhatsApp
-- Open source et gratuit
-- Support complet des fonctionnalités
+- Basé sur le client web officiel WhatsApp
+- Très stable et bien maintenu
+- API riche et complète
+- Support communautaire actif
+- Documentation complète
 
 ## 🚀 Production
 
@@ -371,24 +420,44 @@ Ce worker utilise [@whiskeysockets/baileys](https://github.com/WhiskeySockets/Ba
 ```bash
 npm install -g pm2
 pm2 start src/worker.js --name worker-1
+pm2 save
+pm2 startup
 ```
 
 2. **Configurer les backups** des sessions
 ```bash
 # Backup automatique toutes les heures
-0 * * * * tar -czf sessions-backup-$(date +\%Y\%m\%d-\%H).tar.gz sessions/
+0 * * * * tar -czf sessions-backup-$(date +\%Y\%m\%d-\%H).tar.gz .wwebjs_auth/
 ```
 
 3. **Monitoring** avec Prometheus/Grafana
 
 4. **Load balancing** avec plusieurs workers
 
+5. **Surveillance de la mémoire**
+```bash
+# Redémarrer si mémoire > 1GB
+pm2 start src/worker.js --max-memory-restart 1G
+```
+
+## 🆕 Migration depuis Baileys
+
+Si vous migrez depuis Baileys :
+
+1. **Lire la documentation** : [MIGRATION.md](./MIGRATION.md)
+2. **Guide rapide** : [QUICKSTART.md](./QUICKSTART.md)
+3. **Nettoyer les sessions** : `npm run cleanup`
+4. **Re-scanner les QR codes** pour tous les numéros
+
+⚠️ **Les sessions Baileys ne sont PAS compatibles avec whatsapp-web.js !**
+
 ## 📞 Support
 
 Pour toute question :
-- Consulter les logs du worker
-- Vérifier la connexion RabbitMQ
-- Tester avec un seul worker d'abord
+- Consulter [MIGRATION.md](./MIGRATION.md) et [QUICKSTART.md](./QUICKSTART.md)
+- Vérifier les logs du worker
+- Tester avec `npm run test:whatsapp`
+- Consulter la [documentation whatsapp-web.js](https://wwebjs.dev/)
 
 ## 📄 Licence
 

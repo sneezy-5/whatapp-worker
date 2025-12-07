@@ -1,30 +1,33 @@
 {
   "name": "whatsapp-worker",
   "version": "1.0.0",
-  "description": "WhatsApp Worker with Baileys for message handling",
+  "description": "WhatsApp Worker with whatsapp-web.js for message handling",
   "main": "src/worker.js",
   "type": "module",
   "scripts": {
     "start": "node src/worker.js",
     "dev": "nodemon src/worker.js",
     "test": "jest",
+    "test:whatsapp": "node test-whatsapp.js",
+    "cleanup": "node cleanup-sessions.js",
     "lint": "eslint src/"
   },
   "keywords": [
     "whatsapp",
-    "baileys",
+    "whatsapp-web.js",
     "worker",
     "rabbitmq"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc.9",
+    "whatsapp-web.js": "^1.23.1",
     "amqplib": "^0.10.3",
     "axios": "^1.6.2",
     "dotenv": "^16.3.1",
     "pino": "^8.16.2",
     "pino-pretty": "^10.2.3",
+    "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^9.0.1"
   },

@@ -1,0 +1,15 @@
+{
+    "watch": [
+        "src"
+    ],
+    "ignore": [
+        "sessions/*",
+        ".wwebjs_auth/*",
+        ".wwebjs_cache/*",
+        "test-session/*",
+        "node_modules/*",
+        "logs/*"
+    ],
+    "ext": "js,json",
+    "exec": "node src/worker.js"
+}

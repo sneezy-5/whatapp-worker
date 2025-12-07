@@ -1,53 +1,83 @@
-# Multi-stage build for Node.js Worker
+# Multi-stage build for WhatsApp Worker with whatsapp-web.js
 
 # Stage 1: Dependencies
-FROM node:22-alpine AS dependencies
+FROM node:22-bullseye-slim AS dependencies
 
 WORKDIR /app
 
-# Installer Git pour les dépendances depuis Git
-RUN apk add --no-cache git
+# Install dependencies for Chromium
+RUN apt-get update && apt-get install -y \
+    git \
+    wget \
+    gnupg \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copier les fichiers package.json et package-lock.json (si existant)
+# Copy package files
 COPY package*.json ./
 
-# Installer uniquement les dépendances de production
+# Install production dependencies
 RUN npm install --production && npm cache clean --force
 
 # Stage 2: Runtime
-FROM node:22-alpine
+FROM node:22-bullseye-slim
 
 WORKDIR /app
 
-# Installer dumb-init pour la gestion correcte des signaux
-RUN apk add --no-cache dumb-init
+# Install Chromium and its dependencies for whatsapp-web.js
+RUN apt-get update && apt-get install -y \
+    chromium \
+    chromium-sandbox \
+    fonts-liberation \
+    libappindicator3-1 \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libgdk-pixbuf2.0-0 \
+    libnspr4 \
+    libnss3 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxrandr2 \
+    libgbm1 \
+    libxss1 \
+    libxtst6 \
+    xdg-utils \
+    dumb-init \
+    && rm -rf /var/lib/apt/lists/*
 
-# Créer un utilisateur non-root
-RUN addgroup -g 1001 -S nodejs && \
-    adduser -S nodejs -u 1001 -G nodejs
+# Set Puppeteer to use system Chromium
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
-# Copier les dépendances depuis le stage précédent
+# Create non-root user
+RUN groupadd -r nodejs && useradd -r -g nodejs nodejs
+
+# Copy dependencies from previous stage
 COPY --from=dependencies /app/node_modules ./node_modules
 
-# Copier le code de l'application
+# Copy application code
 COPY --chown=nodejs:nodejs . .
 
-# Créer les répertoires nécessaires
-RUN mkdir -p sessions logs && \
+# Create necessary directories with proper permissions
+RUN mkdir -p sessions logs .wwebjs_auth && \
     chown -R nodejs:nodejs /app
 
-# Utiliser l'utilisateur non-root
+# Switch to non-root user
 USER nodejs:nodejs
 
-# Exposer le port pour les health checks si nécessaire
+# Expose port for health checks if needed
 EXPOSE 3000
 
-# Health check basique
-# HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-#   CMD node -e "console.log('healthy')" || exit 1
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+  CMD node -e "console.log('healthy')" || exit 1
 
-# Utiliser dumb-init pour gérer les signaux correctement
+# Use dumb-init to handle signals properly
 ENTRYPOINT ["dumb-init", "--"]
 
-# Lancer le worker
+# Start the worker
 CMD ["node", "src/worker.js"]

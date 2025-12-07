@@ -46,6 +46,19 @@ class WhatsAppWorker {
         throw consumerError;
       }
 
+      // Restore existing sessions from disk
+      console.log('\n========================================');
+      console.log('🔄 RESTAURATION DES SESSIONS');
+      console.log('========================================\n');
+
+      try {
+        await sessionManager.restoreSessions();
+        console.log('\n✅ Restauration des sessions terminée\n');
+      } catch (restoreError) {
+        console.error('\n⚠️  ERREUR lors de la restauration:', restoreError);
+        logger.warn('Session restoration failed, continuing anyway');
+      }
+
       // Start health checks
       healthHandler.startHealthChecks();
 
