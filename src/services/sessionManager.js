@@ -272,12 +272,20 @@ class SessionManager {
 
       // 3. Ensure Chat exists (helps with syncing)
       // Use exactId which is guaranteed to be correct
-      const chat = await session.client.getChatById(exactId);
-      logger.debug(`[SEND] Chat found: ${chat.name || 'Unknown'} (${chat.id._serialized})`);
+      try {
+        const chat = await session.client.getChatById(exactId);
+        logger.debug(`[SEND] Chat found: ${chat.name || 'Unknown'} (${chat.id._serialized})`);
+
+        // Small delay to ensure sync
+        await new Promise(resolve => setTimeout(resolve, 500));
+      } catch (e) {
+        logger.warn(`[SEND] Could not get chat object, proceeding with direct send: ${e.message}`);
+      }
 
       switch (type.toLowerCase()) {
         case 'text':
-          result = await chat.sendMessage(content);
+          // Revert to client.sendMessage but use the VALIDATED exactId
+          result = await session.client.sendMessage(exactId, content);
           break;
 
         case 'image':
@@ -285,7 +293,7 @@ class SessionManager {
             throw new Error('Media URL is required for image messages');
           }
           const imageMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await chat.sendMessage(imageMedia, {
+          result = await session.client.sendMessage(exactId, imageMedia, {
             caption: content
           });
           break;
@@ -295,7 +303,7 @@ class SessionManager {
             throw new Error('Media URL is required for video messages');
           }
           const videoMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await chat.sendMessage(videoMedia, {
+          result = await session.client.sendMessage(exactId, videoMedia, {
             caption: content
           });
           break;
@@ -305,7 +313,7 @@ class SessionManager {
             throw new Error('Media URL is required for document messages');
           }
           const docMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await chat.sendMessage(docMedia, {
+          result = await session.client.sendMessage(exactId, docMedia, {
             caption: content
           });
           break;
@@ -315,7 +323,7 @@ class SessionManager {
             throw new Error('Media URL is required for audio messages');
           }
           const audioMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await chat.sendMessage(audioMedia);
+          result = await session.client.sendMessage(exactId, audioMedia);
           break;
 
         default:
