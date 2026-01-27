@@ -249,6 +249,13 @@ class SessionManager {
     logger.info(`Sending ${type} message to ${formattedRecipient} (original: ${recipient})`);
 
     try {
+      // 1. Check real connection state
+      const state = await session.client.getState();
+      logger.info(`[SEND] Client state for ${numberId}: ${state}`);
+
+      if (state !== 'CONNECTED') {
+        throw new Error(`Client state is ${state} (not CONNECTED) for number ID: ${numberId}`);
+      }
       // Verify the number is registered on WhatsApp before sending
       try {
         const isRegistered = await session.client.isRegisteredUser(formattedRecipient);
@@ -262,9 +269,14 @@ class SessionManager {
 
       let result;
 
+      // 2. Ensure Chat exists (helps with syncing)
+      const chat = await session.client.getChatById(formattedRecipient);
+      logger.debug(`[SEND] Chat found: ${chat.name || 'Unknown'} (${chat.id._serialized})`);
+
       switch (type.toLowerCase()) {
         case 'text':
-          result = await session.client.sendMessage(formattedRecipient, content);
+          result = await chat.sendMessage(content);
+          // result = await session.client.sendMessage(formattedRecipient, content);
           break;
 
         case 'image':
@@ -272,7 +284,7 @@ class SessionManager {
             throw new Error('Media URL is required for image messages');
           }
           const imageMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(formattedRecipient, imageMedia, {
+          result = await chat.sendMessage(imageMedia, {
             caption: content
           });
           break;
@@ -282,7 +294,7 @@ class SessionManager {
             throw new Error('Media URL is required for video messages');
           }
           const videoMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(formattedRecipient, videoMedia, {
+          result = await chat.sendMessage(videoMedia, {
             caption: content
           });
           break;
@@ -292,7 +304,7 @@ class SessionManager {
             throw new Error('Media URL is required for document messages');
           }
           const docMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(formattedRecipient, docMedia, {
+          result = await chat.sendMessage(docMedia, {
             caption: content
           });
           break;
@@ -302,7 +314,7 @@ class SessionManager {
             throw new Error('Media URL is required for audio messages');
           }
           const audioMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(formattedRecipient, audioMedia);
+          result = await chat.sendMessage(audioMedia);
           break;
 
         default:
