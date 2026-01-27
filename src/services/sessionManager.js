@@ -1,7 +1,5 @@
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
-// We now use the installed chromium, so we don't need the full puppeteer package, 
-// but we need to ensure the arguments are passed correctly to the underlying browser instance.
 import qrcode from 'qrcode-terminal';
 import QRCode from 'qrcode';
 import fs from 'fs';
@@ -46,14 +44,11 @@ class SessionManager {
 
     logger.info(`Session path: ${sessionPath}`);
 
-    // Simplified, proven arguments for Docker stability
+    // Simplified arguments for standard Puppeteer (no Docker issues if running bare metal)
     const puppeteerArgs = [
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process', // Often helps in restricted containers
       '--disable-extensions'
     ];
 
@@ -65,10 +60,8 @@ class SessionManager {
       }),
       puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
+        // No executablePath needed: Puppeteer v22 wil use its bundled Revision
         args: puppeteerArgs,
-        ignoreDefaultArgs: ['--enable-automation'], // Prevent detection sometimes
-        timeout: 60000, // Longer init timeout
       }
     });
 
