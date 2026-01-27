@@ -272,14 +272,18 @@ class SessionManager {
 
       // 3. Ensure Chat exists (helps with syncing)
       // Use exactId which is guaranteed to be correct
+      // 3. Ensure Chat exists and is loaded
       try {
         const chat = await session.client.getChatById(exactId);
         logger.debug(`[SEND] Chat found: ${chat.name || 'Unknown'} (${chat.id._serialized})`);
 
+        // REFRESH: Fetch last message to force-load chat memory and avoid 'markedUnread' on undefined
+        await chat.fetchMessages({ limit: 1 }).catch(e => logger.debug(`Fetch error (ignorable): ${e.message}`));
+
         // Small delay to ensure sync
         await new Promise(resolve => setTimeout(resolve, 500));
       } catch (e) {
-        logger.warn(`[SEND] Could not get chat object, proceeding with direct send: ${e.message}`);
+        logger.warn(`[SEND] Could not get/load chat object, attempting direct send anyway: ${e.message}`);
       }
 
       switch (type.toLowerCase()) {
