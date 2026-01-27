@@ -156,13 +156,19 @@ class MessageHandler {
       }
 
       // Send success response to backend
-      logger.info(`[MESSAGE HANDLER] 📤 Publishing SUCCESS/SENT status for message ${messageId}`);
-      await rabbitmq.publish(config.rabbitmq.queues.messageReceive, {
-        messageId,
-        status: 'SENT',
-        whatsappMessageId: result.messageId,
-        timestamp: Date.now(),
-      });
+      logger.info(`[MESSAGE HANDLER] 📤 Publishing SUCCESS/SENT status for message ${messageId} to queue: ${config.rabbitmq.queues.messageReceive}`);
+
+      try {
+        await rabbitmq.publish(config.rabbitmq.queues.messageReceive, {
+          messageId,
+          status: 'SENT',
+          whatsappMessageId: result.messageId || 'UNKNOWN',
+          timestamp: Date.now(),
+        });
+        logger.info(`[MESSAGE HANDLER] ✅ Successfully published SENT status for ${messageId}`);
+      } catch (pubError) {
+        logger.error(`[MESSAGE HANDLER] ❌ Failed to publish SENT status for ${messageId}:`, pubError);
+      }
 
       logger.info(`Message ${messageId} sent successfully`);
     } catch (error) {
