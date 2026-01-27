@@ -1,5 +1,7 @@
 import pkg from 'whatsapp-web.js';
 const { Client, LocalAuth, MessageMedia } = pkg;
+// We now use the installed chromium, so we don't need the full puppeteer package, 
+// but we need to ensure the arguments are passed correctly to the underlying browser instance.
 import qrcode from 'qrcode-terminal';
 import QRCode from 'qrcode';
 import fs from 'fs';
@@ -44,6 +46,30 @@ class SessionManager {
 
     logger.info(`Session path: ${sessionPath}`);
 
+    // Ultimate crash-proof arguments
+    const puppeteerArgs = [
+      '--no-sandbox', // MUST be first
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage', // Critical for Docker
+      '--disable-accelerated-2d-canvas',
+      '--no-first-run',
+      '--no-zygote',
+      '--single-process', // Sometimes helps in strict containers
+      '--disable-gpu',
+      '--disable-gpu-sandbox',
+      '--disable-software-rasterizer',
+      '--disable-crash-reporter',
+      '--disable-crashpad',
+      '--disable-features=CrashReporter,Translate,UI,Extensions', // Disable unnecessary features
+      '--disable-extensions',
+      '--no-default-browser-check',
+      '--ignore-certificate-errors',
+      '--ignore-certificate-errors-spki-list',
+      '--disable-web-security', // Can reduce strictness checks
+      `--user-data-dir=${sessionPath}/.chrome`, // Explicit user data dir for Chrome
+      `--crash-dumps-dir=/tmp` // Redirect crash dumps
+    ];
+
     // Create WhatsApp client with LocalAuth
     const client = new Client({
       authStrategy: new LocalAuth({
@@ -53,25 +79,9 @@ class SessionManager {
       puppeteer: {
         headless: true,
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium',
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-accelerated-2d-canvas',
-          '--no-first-run',
-          '--no-zygote',
-          '--disable-gpu',
-          '--disable-gpu-sandbox',
-          '--disable-crash-reporter',
-          '--disable-crashpad',
-          '--disable-features=CrashReporter',
-          '--crash-dumps-dir=/tmp',
-          '--disable-extensions',
-          '--disable-software-rasterizer',
-          '--no-default-browser-check',
-          '--password-store=basic',
-          '--use-mock-keychain',
-        ]
+        args: puppeteerArgs,
+        ignoreDefaultArgs: ['--enable-automation'], // Prevent detection sometimes
+        timeout: 60000, // Longer init timeout
       }
     });
 
