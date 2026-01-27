@@ -89,10 +89,19 @@ class WhatsAppWorker {
 
     // Consumer for message sending
     console.log('1️⃣ Configuration consumer message.send...');
+    console.log(`   👉 Ecoute sur la queue: ${config.rabbitmq.queues.messageSend}`);
+
     await rabbitmq.consume(
       config.rabbitmq.queues.messageSend,
       async (data) => {
-        await messageHandler.handleSendMessage(data);
+        console.log('\n🔵 [RABBITMQ] Reçu message sur queue message.send');
+        console.log('   📦 Payload:', JSON.stringify(data));
+        try {
+          await messageHandler.handleSendMessage(data);
+          console.log('   ✅ Traitement message terminé avec succès');
+        } catch (err) {
+          console.error('   ❌ Erreur traitement message:', err.message);
+        }
       }
     );
     console.log('   ✅ Consumer message.send configuré\n');
