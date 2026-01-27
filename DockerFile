@@ -53,6 +53,7 @@ RUN apt-get update && apt-get install -y \
 # Force paths for Puppeteer/Chromium
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV HOME=/app
 
 # Create non-root user
 RUN groupadd -r nodejs && useradd -r -g nodejs nodejs

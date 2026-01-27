@@ -64,6 +64,8 @@ class SessionManager {
           '--disable-gpu-sandbox',
           '--disable-crash-reporter',
           '--disable-crashpad',
+          '--disable-features=CrashReporter',
+          '--crash-dumps-dir=/tmp',
           '--disable-extensions',
           '--disable-software-rasterizer',
           '--no-default-browser-check',
