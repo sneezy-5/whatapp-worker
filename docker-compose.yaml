@@ -3,23 +3,42 @@ version: '3.8'
 services:
   worker:
     image: whatsapp-worker:latest
-    shm_size: '2gb'  # Required for Chromium/Puppeteer
+    shm_size: '2gb'  # Necessary for Chromium memory management
     environment:
       RABBITMQ_URL: amqp://guest:guest@213.199.54.136:5672
       BACKEND_API_URL: http://213.199.54.136:8080/api
+      NODE_ENV: production
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
     volumes:
       - worker_sessions:/app/sessions
-      - worker_auth:/app/.wwebjs_auth  # whatsapp-web.js auth storage
+      - worker_auth:/app/.wwebjs_auth
     networks:
       - whatsapp-network
     deploy:
       replicas: 1
       restart_policy:
         condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+      update_config:
+        parallelism: 1
+        delay: 10s
+        order: stop-first
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2GB
+        reservations:
+          cpus: '0.5'
+          memory: 1GB
 
 volumes:
   worker_sessions:
+    driver: local
   worker_auth:
+    driver: local
 
 networks:
   whatsapp-network:

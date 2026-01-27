@@ -62,8 +62,13 @@ class SessionManager {
           '--no-zygote',
           '--disable-gpu',
           '--disable-crash-reporter',
+          '--disable-crashpad',
           '--disable-extensions',
-          '--disable-software-rasterizer'
+          '--disable-software-rasterizer',
+          '--no-default-browser-check',
+          '--password-store=basic',
+          '--use-mock-keychain',
+          '--crash-dumps-dir=/tmp'
         ]
       }
     });
