@@ -9,7 +9,7 @@ services:
       BACKEND_API_URL: http://213.199.54.136:8080/api
       NODE_ENV: production
       PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
-      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/google-chrome-stable"
+      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
     volumes:
       - worker_sessions:/app/sessions
       - worker_auth:/app/.wwebjs_auth
