@@ -55,8 +55,11 @@ ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV HOME=/app
 
-# Create non-root user
-RUN groupadd -r nodejs && useradd -r -g nodejs nodejs
+# Create non-root user and necessary directories
+RUN groupadd -r nodejs && useradd -r -g nodejs nodejs && \
+    mkdir -p sessions logs .wwebjs_auth /tmp/crashpad && \
+    chmod 777 /tmp/crashpad && \
+    chown -R nodejs:nodejs /app sessions logs .wwebjs_auth
 
 # Copy dependencies from previous stage
 COPY --from=dependencies /app/node_modules ./node_modules

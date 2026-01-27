@@ -54,20 +54,21 @@ class SessionManager {
       '--disable-accelerated-2d-canvas',
       '--no-first-run',
       '--no-zygote',
-      '--single-process', // Sometimes helps in strict containers
+      // '--single-process', // Removed as it can cause instability
       '--disable-gpu',
       '--disable-gpu-sandbox',
       '--disable-software-rasterizer',
       '--disable-crash-reporter',
       '--disable-crashpad',
-      '--disable-features=CrashReporter,Translate,UI,Extensions', // Disable unnecessary features
+      '--disable-features=CrashReporter,Translate,UI,Extensions',
+      '--disable-in-process-stack-traces',
       '--disable-extensions',
       '--no-default-browser-check',
       '--ignore-certificate-errors',
       '--ignore-certificate-errors-spki-list',
-      '--disable-web-security', // Can reduce strictness checks
-      `--user-data-dir=${sessionPath}/.chrome`, // Explicit user data dir for Chrome
-      `--crash-dumps-dir=/tmp` // Redirect crash dumps
+      '--disable-web-security',
+      `--user-data-dir=${sessionPath}/.chrome`,
+      `--crash-dumps-dir=/tmp/crashpad` // Explicit 777 directory
     ];
 
     // Create WhatsApp client with LocalAuth
