@@ -315,7 +315,14 @@ class SessionManager {
         messageId: result.id.id,
       };
     } catch (error) {
-      if (error.message && error.message.includes('No LID for user')) {
+      const errorMessage = error.message || '';
+      const errorStack = error.stack || '';
+      const errorString = String(error);
+      const isMarkedUnreadError = /markedUnread/i.test(errorMessage) ||
+        /markedUnread/i.test(errorStack) ||
+        /markedUnread/i.test(errorString);
+
+      if (errorMessage.includes('No LID for user')) {
         const betterError = new Error(
           `Cannot send message to ${recipient}: Number not registered on WhatsApp or session not fully ready. ` +
           `Please ensure the session is connected and the recipient number is valid.`
@@ -327,8 +334,8 @@ class SessionManager {
 
       // Special case for 'markedUnread' error which is a known Puppeteer evaluation failure in whatsapp-web.js
       // Often the message is actually sent despite this error occurring in the post-send checks
-      if (error.message && error.message.includes('markedUnread')) {
-        logger.warn(`[SESSION MANAGER] Ignoring markedUnread error for ${recipient}: ${error.message}. Message might have been sent.`);
+      if (isMarkedUnreadError) {
+        logger.warn(`[SESSION MANAGER] Ignoring markedUnread error for ${recipient}: ${errorMessage}. Message might have been sent.`);
         return {
           success: true,
           messageId: 'UNKNOWN_ID',

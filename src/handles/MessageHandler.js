@@ -116,13 +116,29 @@ class MessageHandler {
           break; // Success, exit loop
 
         } catch (error) {
-          logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${error.message}`);
+          const errorMessage = error.message || '';
+          const isMarkedUnreadError = /markedUnread/i.test(errorMessage) ||
+            /markedUnread/i.test(String(error)) ||
+            (error.stack && /markedUnread/i.test(error.stack));
+
+          if (isMarkedUnreadError) {
+            logger.warn(`[MESSAGE HANDLER] Ignoring markedUnread error for ${formattedRecipient}. Treating as success.`);
+            result = {
+              success: true,
+              messageId: 'UNKNOWN_ID',
+              warning: 'markedUnread'
+            };
+            successfulNumber = formattedRecipient;
+            break; // Message likely sent, stop trying variants
+          }
+
+          logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${errorMessage}`);
           lastError = error;
 
           // If it's not a registration-related error (which would justify trying other variants),
           // throw it immediately to avoid unnecessary retries.
-          if (!error.message.includes('not registered') &&
-            !error.message.includes('No LID for user') &&
+          if (!errorMessage.includes('not registered') &&
+            !errorMessage.includes('No LID for user') &&
             error.code !== 'INVALID_RECIPIENT') {
             throw error;
           }
