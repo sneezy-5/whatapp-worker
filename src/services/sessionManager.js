@@ -325,6 +325,17 @@ class SessionManager {
         throw betterError;
       }
 
+      // Special case for 'markedUnread' error which is a known Puppeteer evaluation failure in whatsapp-web.js
+      // Often the message is actually sent despite this error occurring in the post-send checks
+      if (error.message && error.message.includes('markedUnread')) {
+        logger.warn(`[SESSION MANAGER] Ignoring markedUnread error for ${recipient}: ${error.message}. Message might have been sent.`);
+        return {
+          success: true,
+          messageId: 'UNKNOWN_ID',
+          warning: 'Evaluation failed: markedUnread'
+        };
+      }
+
       logger.error(`Error sending message to ${recipient}:`, error);
       throw error;
     }

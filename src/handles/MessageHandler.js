@@ -119,10 +119,11 @@ class MessageHandler {
           logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${error.message}`);
           lastError = error;
 
-          // If it's not a "not registered" error, don't try other variants
+          // If it's not a registration-related error (which would justify trying other variants),
+          // throw it immediately to avoid unnecessary retries.
           if (!error.message.includes('not registered') &&
             !error.message.includes('No LID for user') &&
-            !error.code === 'INVALID_RECIPIENT') {
+            error.code !== 'INVALID_RECIPIENT') {
             throw error;
           }
         }
