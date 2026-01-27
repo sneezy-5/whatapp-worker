@@ -46,29 +46,15 @@ class SessionManager {
 
     logger.info(`Session path: ${sessionPath}`);
 
-    // Ultimate crash-proof arguments
+    // Simplified, proven arguments for Docker stability
     const puppeteerArgs = [
-      '--no-sandbox', // MUST be first
+      '--no-sandbox',
       '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage', // Critical for Docker
-      '--disable-accelerated-2d-canvas',
-      '--no-first-run',
-      '--no-zygote',
-      // '--single-process', // Removed as it can cause instability
+      '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--disable-gpu-sandbox',
-      '--disable-software-rasterizer',
-      '--disable-crash-reporter',
-      '--disable-crashpad',
-      '--disable-features=CrashReporter,Translate,UI,Extensions',
-      '--disable-in-process-stack-traces',
-      '--disable-extensions',
-      '--no-default-browser-check',
-      '--ignore-certificate-errors',
-      '--ignore-certificate-errors-spki-list',
-      '--disable-web-security',
-      `--user-data-dir=${sessionPath}/.chrome`,
-      `--crash-dumps-dir=/tmp/crashpad` // Explicit 777 directory
+      '--no-zygote',
+      '--single-process', // Often helps in restricted containers
+      '--disable-extensions'
     ];
 
     // Create WhatsApp client with LocalAuth
