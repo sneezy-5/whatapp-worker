@@ -59,7 +59,12 @@ class MessageHandler {
   }
 
   async handleSendMessage(data) {
-    const { messageId, recipientNumber, content, type, whatsappNumberId, mediaUrl } = data;
+    let { messageId, recipientNumber, content, type, whatsappNumberId, mediaUrl } = data;
+
+    // Sanitize recipient number (remove spaces, newlines, etc)
+    if (recipientNumber) {
+      recipientNumber = recipientNumber.replace(/\s/g, '').trim();
+    }
 
     logger.info(`[MESSAGE HANDLER] Processing message ${messageId} to ${recipientNumber}`);
     logger.info(`[MESSAGE HANDLER] whatsappNumberId: ${whatsappNumberId} (type: ${typeof whatsappNumberId})`);
