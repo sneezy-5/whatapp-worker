@@ -156,6 +156,7 @@ class MessageHandler {
       }
 
       // Send success response to backend
+      logger.info(`[MESSAGE HANDLER] 📤 Publishing SUCCESS/SENT status for message ${messageId}`);
       await rabbitmq.publish(config.rabbitmq.queues.messageReceive, {
         messageId,
         status: 'SENT',
