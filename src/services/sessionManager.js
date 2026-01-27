@@ -52,7 +52,7 @@ class SessionManager {
       }),
       puppeteer: {
         headless: true,
-        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+        executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/google-chrome-stable',
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -61,6 +61,7 @@ class SessionManager {
           '--no-first-run',
           '--no-zygote',
           '--disable-gpu',
+          '--disable-gpu-sandbox',
           '--disable-crash-reporter',
           '--disable-crashpad',
           '--disable-extensions',
@@ -68,7 +69,6 @@ class SessionManager {
           '--no-default-browser-check',
           '--password-store=basic',
           '--use-mock-keychain',
-          '--crash-dumps-dir=/tmp'
         ]
       }
     });
