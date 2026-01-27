@@ -126,16 +126,8 @@ class MessageHandler {
             /markedUnread/i.test(String(error)) ||
             (error.stack && /markedUnread/i.test(error.stack));
 
-          if (isMarkedUnreadError) {
-            logger.warn(`[MESSAGE HANDLER] Ignoring markedUnread error for ${formattedRecipient}. Treating as success.`);
-            result = {
-              success: true,
-              messageId: 'UNKNOWN_ID',
-              warning: 'markedUnread'
-            };
-            successfulNumber = formattedRecipient;
-            break; // Message likely sent, stop trying variants
-          }
+          // If we removed the 'markedUnread' bypass, we just catch the error normally.
+          // The error will be logged below and we'll try the next number variant.
 
           logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${errorMessage}`);
           lastError = error;
