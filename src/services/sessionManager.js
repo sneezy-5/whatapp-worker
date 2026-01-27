@@ -256,27 +256,28 @@ class SessionManager {
       if (state !== 'CONNECTED') {
         throw new Error(`Client state is ${state} (not CONNECTED) for number ID: ${numberId}`);
       }
-      // Verify the number is registered on WhatsApp before sending
-      try {
-        const isRegistered = await session.client.isRegisteredUser(formattedRecipient);
-        if (!isRegistered) {
-          throw new Error(`Number ${recipient} is not registered on WhatsApp`);
-        }
-        logger.debug(`Number ${recipient} is registered on WhatsApp`);
-      } catch (checkError) {
-        logger.warn(`Could not verify if ${recipient} is registered:`, checkError.message);
+
+      // 2. Validate Number via WhatsApp API (Crucial!)
+      const numberDetails = await session.client.getNumberId(formattedRecipient);
+
+      if (!numberDetails) {
+        logger.error(`[SEND] Number not found on WhatsApp: ${formattedRecipient}`);
+        throw new Error(`Number ${recipient} is not registered on WhatsApp`);
       }
+
+      const exactId = numberDetails._serialized; // Use the exact ID returned by WhatsApp
+      logger.info(`[SEND] Number validated. Exact ID: ${exactId}`);
 
       let result;
 
-      // 2. Ensure Chat exists (helps with syncing)
-      const chat = await session.client.getChatById(formattedRecipient);
+      // 3. Ensure Chat exists (helps with syncing)
+      // Use exactId which is guaranteed to be correct
+      const chat = await session.client.getChatById(exactId);
       logger.debug(`[SEND] Chat found: ${chat.name || 'Unknown'} (${chat.id._serialized})`);
 
       switch (type.toLowerCase()) {
         case 'text':
           result = await chat.sendMessage(content);
-          // result = await session.client.sendMessage(formattedRecipient, content);
           break;
 
         case 'image':
