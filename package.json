@@ -30,7 +30,7 @@
     "qrcode": "^1.5.3",
     "qrcode-terminal": "^0.12.0",
     "uuid": "^9.0.1",
-    "whatsapp-web.js": "^1.23.1"
+    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
   },
   "devDependencies": {
     "eslint": "^8.55.0",
