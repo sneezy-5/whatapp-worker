@@ -288,8 +288,19 @@ class SessionManager {
 
       switch (type.toLowerCase()) {
         case 'text':
-          // Revert to client.sendMessage but use the VALIDATED exactId
-          result = await session.client.sendMessage(exactId, content);
+          // EXTREME FIX: Monkey-patch sendSeen on the Chat object to avoid 'markedUnread' crash
+          // The crash happens because WWebJS tries to mark the chat as read/seen, but the internal property is missing.
+          try {
+            const chatObj = await session.client.getChatById(exactId);
+            // Disable sendSeen for this specific send operation
+            chatObj.sendSeen = async () => true;
+
+            // Now send using the chat object which has the safe sendSeen
+            result = await chatObj.sendMessage(content);
+          } catch (patchError) {
+            logger.warn(`[SEND] Patching/sending failed, fallback to direct client send: ${patchError.message}`);
+            result = await session.client.sendMessage(exactId, content);
+          }
           break;
 
         case 'image':
