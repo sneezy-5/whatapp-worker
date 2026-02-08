@@ -144,18 +144,20 @@ class SessionManager {
       session.connected = false;
       session.isReady = false;
 
-      if (reason === 'LOGOUT') {
-        logger.info(`Session ${sessionId} logged out, cleaning up...`);
-        this.sessions.delete(sessionId);
+      // Notify backend of disconnection on the workerEvents queue
+      await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+        action: 'disconnected',
+        numberId: session.numberId,
+        sessionId,
+        reason: reason || 'UNKNOWN',
+        timestamp: Date.now(),
+      });
 
-        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-          action: 'disconnected',
-          numberId: session.numberId,
-          sessionId,
-          reason: 'LOGOUT',
-          timestamp: Date.now(),
-        });
+      if (reason === 'LOGOUT') {
+        logger.info(`Session ${sessionId} logged out, cleaning up memory...`);
+        this.sessions.delete(sessionId);
       } else {
+        // Also report as health issue if it's not a voluntary logout
         await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
           numberId: session.numberId,
           status: 'DISCONNECTED',
@@ -400,26 +402,67 @@ class SessionManager {
     return session;
   }
 
-  async closeSession(sessionId) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return;
+  async closeSession(numberId, deleteFiles = false) {
+    const session = this.getSession(numberId);
+    if (!session) {
+      // If we want to delete files even if session isn't active in memory
+      if (deleteFiles) {
+        // We need to reconstruct the sessionId to find the folder
+        // This is a bit tricky if we don't have the phoneNumber here
+        // But usually we call this when we have a session or we can find the folder by pattern
+        logger.warn(`[CLOSE SESSION] No active session for numberId ${numberId}, but deleteFiles requested. Searching disk...`);
+        this.cleanupSessionStorage(numberId);
+      }
+      return;
+    }
 
-    logger.info(`Closing session: ${sessionId}`);
+    const { sessionId } = session;
+    logger.info(`[CLOSE SESSION] Closing session: ${sessionId} (deleteFiles: ${deleteFiles})`);
 
     try {
-      await session.client.destroy();
+      // Remove all listeners to prevent reconnection attempts during destruction
+      if (session.client) {
+        // WWebJS doesn't have a direct removeAllListeners on the internal emitter easily, 
+        // but destroy() usually handles it. Still, we stop it first.
+        await session.client.destroy();
+      }
     } catch (error) {
-      logger.error(`Error closing session ${sessionId}:`, error);
+      logger.error(`[CLOSE SESSION] Error destroying client for ${sessionId}:`, error);
     }
 
     this.sessions.delete(sessionId);
+
+    if (deleteFiles) {
+      this.cleanupSessionStorage(numberId);
+    }
+  }
+
+  /**
+   * Physically removes session data from disk
+   */
+  cleanupSessionStorage(numberId) {
+    try {
+      const sessionDirs = fs.readdirSync(this.sessionDir);
+      const prefix = `session_${numberId}_`;
+
+      const dirsToDelete = sessionDirs.filter(d => d.startsWith(prefix));
+
+      for (const dirName of dirsToDelete) {
+        const fullPath = path.join(this.sessionDir, dirName);
+        logger.info(`[CLEANUP] Deleting session directory: ${fullPath}`);
+        fs.rmSync(fullPath, { recursive: true, force: true });
+        logger.info(`[CLEANUP] ✅ Deleted: ${dirName}`);
+      }
+    } catch (error) {
+      logger.error(`[CLEANUP] Error during disk cleanup for numberId ${numberId}:`, error);
+    }
   }
 
   async closeAllSessions() {
     logger.info('Closing all sessions...');
 
-    for (const [sessionId] of this.sessions) {
-      await this.closeSession(sessionId);
+    for (const session of this.sessions.values()) {
+      await this.closeSession(session.numberId);
     }
   }
 

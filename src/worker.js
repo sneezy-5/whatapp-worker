@@ -194,11 +194,11 @@ class WhatsAppWorker {
 
     // ✅ FILTRAGE PAR WORKER ID
     // Si le message contient un workerId et qu'il ne correspond pas au nôtre, on l'ignore
-    // if (workerId && workerId !== config.worker.id) {
-    //   console.log(`❌ Message ignoré - Pour worker ${workerId}, je suis ${config.worker.id}`);
-    //   logger.debug(`Ignoring message for worker ${workerId} (I am ${config.worker.id})`);
-    //   return;
-    // }
+    if (workerId && workerId !== config.worker.id) {
+      console.log(`❌ Message ignoré - Pour worker ${workerId}, je suis ${config.worker.id}`);
+      logger.debug(`Ignoring message for worker ${workerId} (I am ${config.worker.id})`);
+      return;
+    }
 
     console.log(`✅ Message accepté - Action: ${action}, Number: ${numberId}`);
     logger.info(`Session update: ${action} for number ${numberId} (worker: ${workerId || 'any'})`);
@@ -222,14 +222,8 @@ class WhatsAppWorker {
           return;
         }
         console.log(`🔄 Fermeture de session pour numéro ${numberId}...`);
-        const session = sessionManager.getSession(numberId);
-        if (session) {
-          await sessionManager.closeSession(session.sessionId);
-          console.log(`✅ Session fermée pour numéro ${numberId}`);
-        } else {
-          logger.warn(`Session not found for number ${numberId}`);
-          console.warn(`⚠️ Session non trouvée pour numéro ${numberId}`);
-        }
+        await sessionManager.closeSession(numberId);
+        console.log(`✅ Session fermée pour numéro ${numberId}`);
         break;
 
       case 'reconnect':
@@ -239,11 +233,8 @@ class WhatsAppWorker {
           return;
         }
         console.log(`🔄 Reconnexion de session pour numéro ${numberId}...`);
-        const existingSession = sessionManager.getSession(numberId);
-        if (existingSession) {
-          await sessionManager.closeSession(existingSession.sessionId);
-          console.log(`✅ Ancienne session fermée pour numéro ${numberId}`);
-        }
+        await sessionManager.closeSession(numberId);
+        console.log(`✅ Ancienne session fermée pour numéro ${numberId}`);
         await sessionManager.createSession(numberId, phoneNumber);
         console.log(`✅ Nouvelle session créée pour numéro ${numberId}`);
         break;
@@ -255,45 +246,22 @@ class WhatsAppWorker {
           return;
         }
 
-        console.log(`🔄 Régénération manuelle du QR demandée pour numéro ${numberId}...`);
-        logger.info(`Manual QR regeneration requested for number ${numberId}`);
+        console.log(`\n🔄 [REGENERATE] Force regeneration for number ${numberId}`);
+        logger.info(`Force QR regeneration requested for number ${numberId}`);
 
-        // Vérifier si une session existe
-        const currentSession = sessionManager.getSession(numberId);
+        // 1. Fermer la session existante ET supprimer les fichiers d'authentification (TrÈS IMPORTANT)
+        // Cela correspond à la logique 'forceRegenerateQR' demandée
+        await sessionManager.closeSession(numberId, true);
+        console.log(`🗑️ Session closed and authentication files deleted for ${numberId}`);
 
-        if (currentSession) {
-          // Vérifier si déjà connecté
-          if (currentSession.connected) {
-            console.log(`✅ Session déjà connectée pour numéro ${numberId} - Pas besoin de QR`);
-            logger.info(`Session already connected for number ${numberId}`);
-
-            // Notifier le backend que la session est déjà connectée
-            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
-              action: 'connected',
-              numberId: numberId,
-              sessionId: currentSession.sessionId,
-              message: 'Session already connected. No QR needed.',
-              timestamp: Date.now(),
-            });
-            return;
-          }
-
-          // Session existe mais pas connectée → Fermer et recréer
-          console.log(`🔄 Fermeture de la session existante pour régénération du QR...`);
-          await sessionManager.closeSession(currentSession.sessionId);
-          console.log(`✅ Ancienne session fermée`);
-        }
-
-        // Réinitialiser le compteur de tentatives QR pour ce numéro
+        // 2. Réinitialiser le compteur de tentatives QR pour ce numéro
         sessionManager.resetQrRetries(numberId);
-        console.log(`🔄 Compteur de tentatives QR réinitialisé pour numéro ${numberId}`);
+        console.log(`🔄 QR retry counter reset for number ${numberId}`);
 
-        // Créer une nouvelle session (qui générera un nouveau QR)
-        console.log(`🔄 Création d'une nouvelle session pour générer un nouveau QR...`);
+        // 3. Créer une nouvelle session (qui générera obligatoirement un nouveau QR car les fichiers sont supprimés)
+        console.log(`🚀 Creating new session for number ${numberId}...`);
         await sessionManager.createSession(numberId, phoneNumber);
-        console.log(`✅ Nouvelle session créée - Nouveau QR en cours de génération pour numéro ${numberId}`);
-
-        logger.info(`QR regeneration initiated for number ${numberId}`);
+        console.log(`✅ New session initialization started for number ${numberId}`);
         break;
 
       default:
