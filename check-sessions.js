@@ -6,7 +6,6 @@
  */
 
 import sessionManager from './src/services/sessionManager.js';
-import logger from './src/utils/logger.js';
 
 console.log('\n╔══════════════════════════════════════════════════════════════════╗');
 console.log('║                                                                  ║');
