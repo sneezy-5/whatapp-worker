@@ -10,6 +10,7 @@
     "test": "jest",
     "test:whatsapp": "node test-whatsapp.js",
     "cleanup": "node cleanup-sessions.js",
+    "check-updates": "node check-updates.js",
     "lint": "eslint src/"
   },
   "keywords": [

@@ -439,6 +439,11 @@ pm2 startup
 # Redémarrer si mémoire > 1GB
 pm2 start src/worker.js --max-memory-restart 1G
 ```
+  
+6. **Mise à jour automatique**
+```bash
+npm run check-updates
+```
 
 ## 🆕 Migration depuis Baileys
 
