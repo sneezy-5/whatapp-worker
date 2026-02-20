@@ -59,10 +59,10 @@ class SessionManager {
         dataPath: sessionPath
       }),
       // Using specific web version as workaround for 'markedUnread' error
-      webVersion: '2.3000.1033110843-alpha',
+      webVersion: '2.3000.1033759004-alpha',
       webVersionCache: {
         type: "remote",
-        remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1033110843-alpha.html",
+        remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1033759004-alpha.html",
       },
       puppeteer: {
         headless: true,
