@@ -58,12 +58,6 @@ class SessionManager {
         clientId: sessionId,
         dataPath: sessionPath
       }),
-      // Using specific web version as workaround for 'markedUnread' error
-      webVersion: '2.3000.1034660987-alpha',
-      webVersionCache: {
-        type: "remote",
-        remotePath: "https://raw.githubusercontent.com/wppconnect-team/wa-version/main/html/2.3000.1034660987-alpha.html",
-      },
       puppeteer: {
         headless: true,
         args: puppeteerArgs,
@@ -204,10 +198,12 @@ class SessionManager {
       await client.initialize();
       logger.info(`Client initialized for ${sessionId}`);
     } catch (error) {
-      logger.error(`Failed to initialize client for ${sessionId}:`);
-      logger.error(`Error name: ${error.name}`);
-      logger.error(`Error message: ${error.message}`);
-      logger.error(`Error stack: ${error.stack}`);
+      logger.error({ err: error }, `Failed to initialize client for ${sessionId}`);
+      console.error(`\n❌ [SESSION ${sessionId}] Initialization Error:`);
+      console.error(`   Name: ${error.name}`);
+      console.error(`   Message: ${error.message}`);
+      console.error(`   Stack: ${error.stack}\n`);
+
       this.sessions.delete(sessionId);
       throw error;
     }

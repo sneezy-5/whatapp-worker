@@ -101,6 +101,7 @@ class WhatsAppWorker {
           console.log('   ✅ Traitement message terminé avec succès');
         } catch (err) {
           console.error('   ❌ Erreur traitement message:', err.message);
+          throw err; // Re-throw to allow RabbitMQ service to handle nack/requeue if temporary
         }
       }
     );
