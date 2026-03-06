@@ -172,11 +172,9 @@ class MessageHandler {
     } catch (error) {
       logger.error(`Failed to send message ${messageId}:`, error);
 
-      // Check if it's a temporary error (network issue, etc.)
+      // Stop marking session connection issues as temporary to prevent infinite loops
       const temporary = error.message.includes('ECONNREFUSED') ||
-        error.message.includes('ETIMEDOUT') ||
-        error.message.includes('Session not connected') ||
-        error.message.includes('Session not ready');
+        error.message.includes('ETIMEDOUT');
 
       // Check if it's an invalid recipient error (permanent)
       const invalidRecipient = error.code === 'INVALID_RECIPIENT' ||

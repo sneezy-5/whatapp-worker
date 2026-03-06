@@ -49,7 +49,10 @@ class SessionManager {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
-      '--disable-extensions'
+      '--disable-extensions',
+      '--disable-gpu',
+      '--no-zygote',
+      '--no-first-run'
     ];
 
     // Create WhatsApp client with LocalAuth
@@ -199,12 +202,14 @@ class SessionManager {
       logger.info(`Client initialized for ${sessionId}`);
     } catch (error) {
       logger.error({ err: error }, `Failed to initialize client for ${sessionId}`);
-      console.error(`\n❌ [SESSION ${sessionId}] Initialization Error:`);
-      console.error(`   Name: ${error.name}`);
-      console.error(`   Message: ${error.message}`);
-      console.error(`   Stack: ${error.stack}\n`);
+      console.error(`\n❌ [SESSION ${sessionId}] Initialization Error: ${error.message}\n`);
 
       this.sessions.delete(sessionId);
+
+      // CRITICAL: Clear session folder on disk if initialization fails
+      logger.warn(`[CLEANUP] Initialization failed for ${sessionId}, removing folder...`);
+      this.cleanupSessionStorage(numberId);
+
       throw error;
     }
 
