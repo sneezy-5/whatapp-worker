@@ -21,13 +21,16 @@ export async function checkUpdates() {
     };
 
     try {
-        // 1. Get current hardcoded version from sessionManager.js
+        // 1. Check if hardcoded version exists in sessionManager.js
         const content = fs.readFileSync(SESSION_MANAGER_PATH, 'utf8');
         const versionMatch = content.match(/webVersion:\s*'([^']+)'/);
 
         if (versionMatch) {
             results.webVersion.current = versionMatch[1];
             console.log(`📡 Current hardcoded WhatsApp Web version: ${results.webVersion.current}`);
+        } else {
+            console.log(`📡 No hardcoded version found (using library default).`);
+            results.webVersion.current = 'default';
         }
 
         // 2. Fetch latest version from WPPConnect WA Version repo
