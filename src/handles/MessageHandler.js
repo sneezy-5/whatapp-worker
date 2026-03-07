@@ -88,8 +88,12 @@ class MessageHandler {
       logger.info(`[MESSAGE HANDLER] Found session: ${session.sessionId}`);
 
       if (!session.connected) {
-        logger.error(`[MESSAGE HANDLER] Session not connected: ${session.sessionId}`);
-        throw new Error(`Session not connected for number ID: ${numberId}`);
+        if (!session.isReady) {
+          logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is still initializing/waiting for QR scan.`);
+          throw new Error(`Session is not ready yet (initializing) for number ID: ${numberId}`);
+        }
+        logger.error(`[MESSAGE HANDLER] Session ${session.sessionId} is disconnected.`);
+        throw new Error(`Session disconnected for number ID: ${numberId}`);
       }
 
       logger.info(`[MESSAGE HANDLER] Session is connected and ready`);
