@@ -28,7 +28,8 @@ const client = new Client({
             '--no-first-run',
             '--no-zygote',
             '--disable-gpu'
-        ]
+        ],
+        protocolTimeout: 0,
     }
 });
 

@@ -87,13 +87,19 @@ class MessageHandler {
 
       logger.info(`[MESSAGE HANDLER] Found session: ${session.sessionId}`);
 
-      if (!session.connected) {
-        if (!session.isReady) {
-          logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is still initializing/waiting for QR scan.`);
-          throw new Error(`Session is not ready yet (initializing) for number ID: ${numberId}`);
+      if (!session.connected || !session.isReady) {
+        const isWaitingForQR = !!session.qrCode;
+        if (isWaitingForQR) {
+          logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is waiting for QR scan. Cannot send message.`);
+          throw new Error(`Session is waiting for QR scan for number ID: ${numberId}`);
+        } else {
+          logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is still initializing. Re-queueing...`);
+          // Small delay before throwing to avoid tight retry loop in RabbitMQ
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          const initError = new Error(`Session is still initializing for number ID: ${numberId}`);
+          initError.temporary = true;
+          throw initError;
         }
-        logger.error(`[MESSAGE HANDLER] Session ${session.sessionId} is disconnected.`);
-        throw new Error(`Session disconnected for number ID: ${numberId}`);
       }
 
       logger.info(`[MESSAGE HANDLER] Session is connected and ready`);
@@ -177,8 +183,10 @@ class MessageHandler {
       logger.error(`Failed to send message ${messageId}:`, error);
 
       // Stop marking session connection issues as temporary to prevent infinite loops
-      const temporary = error.message.includes('ECONNREFUSED') ||
-        error.message.includes('ETIMEDOUT');
+      const temporary = error.temporary || 
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('ETIMEDOUT') ||
+        error.message.includes('initializing');
 
       // Check if it's an invalid recipient error (permanent)
       const invalidRecipient = error.code === 'INVALID_RECIPIENT' ||

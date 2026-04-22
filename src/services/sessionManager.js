@@ -64,6 +64,7 @@ class SessionManager {
       puppeteer: {
         headless: true,
         args: puppeteerArgs,
+        protocolTimeout: 0,
       }
     });
 
