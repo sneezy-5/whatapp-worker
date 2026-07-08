@@ -93,10 +93,16 @@ class MessageHandler {
           logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is waiting for QR scan. Cannot send message.`);
           throw new Error(`Session is waiting for QR scan for number ID: ${numberId}`);
         } else {
-          logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is still initializing. Re-queueing...`);
+          logger.warn(`[MESSAGE HANDLER] Session ${session.sessionId} is not connected/ready. Triggering background auto-reconnect...`);
+          
+          // Trigger a reconnection in the background
+          sessionManager.createSession(numberId, session.phoneNumber).catch(err => {
+            logger.error(`[MESSAGE HANDLER] Background auto-reconnect failed for ${session.sessionId}:`, err);
+          });
+
           // Small delay before throwing to avoid tight retry loop in RabbitMQ
           await new Promise(resolve => setTimeout(resolve, 2000));
-          const initError = new Error(`Session is still initializing for number ID: ${numberId}`);
+          const initError = new Error(`Session is still initializing or connecting for number ID: ${numberId}`);
           initError.temporary = true;
           throw initError;
         }
@@ -198,7 +204,7 @@ class MessageHandler {
         messageId,
         status: 'FAILED',
         errorMessage: error.message,
-        errorCode: error.code || 'UNKNOWN',
+        errorCode: error.code || (invalidRecipient ? 'INVALID_RECIPIENT' : 'UNKNOWN'),
         temporary: temporary && !invalidRecipient,
         timestamp: Date.now(),
       });

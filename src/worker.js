@@ -101,7 +101,11 @@ class WhatsAppWorker {
           console.log('   ✅ Traitement message terminé avec succès');
         } catch (err) {
           console.error('   ❌ Erreur traitement message:', err.message);
-          throw err; // Re-throw to allow RabbitMQ service to handle nack/requeue if temporary
+          const isTemporary = err.temporary || false;
+          if (isTemporary) {
+            throw err; // Re-throw to allow RabbitMQ service to handle nack/requeue if temporary
+          }
+          console.log(`   ℹ️ Erreur permanente pour le message ${data.messageId}. Le message a été traité (statut envoyé au backend) et acquitté (ACK).`);
         }
       }
     );
@@ -217,14 +221,15 @@ class WhatsAppWorker {
         break;
 
       case 'close':
+      case 'delete':
         if (!numberId) {
-          logger.error('Missing numberId in close action');
-          console.error('❌ numberId manquant pour close');
+          logger.error(`Missing numberId in ${action} action`);
+          console.error(`❌ numberId manquant pour ${action}`);
           return;
         }
-        console.log(`🔄 Fermeture de session pour numéro ${numberId}...`);
-        await sessionManager.closeSession(numberId);
-        console.log(`✅ Session fermée pour numéro ${numberId}`);
+        console.log(`🔄 Suppression/Fermeture de session pour numéro ${numberId}...`);
+        await sessionManager.closeSession(numberId, true);
+        console.log(`✅ Session supprimée/fermée pour numéro ${numberId}`);
         break;
 
       case 'reconnect':

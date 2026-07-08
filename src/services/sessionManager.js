@@ -29,9 +29,16 @@ class SessionManager {
     logger.info(`[CREATE SESSION] SessionId will be: ${sessionId}`);
     logger.info(`[CREATE SESSION] Current active sessions: ${this.sessions.size}`);
 
+    const existingSession = this.sessions.get(sessionId);
+    const lastReconnectAttempt = existingSession ? (existingSession.lastReconnectAttempt || 0) : 0;
+
     if (this.sessions.has(sessionId)) {
-      logger.warn(`[CREATE SESSION] Session ${sessionId} already exists, returning existing session`);
-      return this.sessions.get(sessionId);
+      if (existingSession.connected && existingSession.isReady) {
+        logger.warn(`[CREATE SESSION] Session ${sessionId} already exists and is connected, returning existing session`);
+        return existingSession;
+      }
+      logger.warn(`[CREATE SESSION] Session ${sessionId} exists in memory but is not connected/ready. Closing and recreating...`);
+      await this.closeSession(numberId, false);
     }
 
     logger.info(`[CREATE SESSION] Creating new WhatsApp session: ${sessionId} for ${phoneNumber}`);
@@ -75,7 +82,9 @@ class SessionManager {
       phoneNumber,
       connected: false,
       qrCode: null,
-      isReady: false
+      isReady: false,
+      disconnectedSince: Date.now(),
+      lastReconnectAttempt: lastReconnectAttempt || Date.now()
     };
 
     this.sessions.set(sessionId, session);
@@ -113,6 +122,7 @@ class SessionManager {
       session.connected = true;
       session.isReady = true;
       session.qrCode = null;
+      session.disconnectedSince = null;
       this.qrRetryAttempts.delete(session.numberId);
 
       await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
@@ -141,6 +151,7 @@ class SessionManager {
 
       session.connected = false;
       session.isReady = false;
+      session.disconnectedSince = session.disconnectedSince || Date.now();
 
       // Notify backend of disconnection on the workerEvents queue
       await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
@@ -271,7 +282,9 @@ class SessionManager {
 
       if (!numberDetails) {
         logger.error(`[SEND] Number not found on WhatsApp: ${formattedRecipient}`);
-        throw new Error(`Number ${recipient} is not registered on WhatsApp`);
+        const regError = new Error(`Number ${recipient} is not registered on WhatsApp`);
+        regError.code = 'INVALID_RECIPIENT';
+        throw regError;
       }
 
       const exactId = numberDetails._serialized; // Use the exact ID returned by WhatsApp
@@ -468,13 +481,52 @@ class SessionManager {
     }
   }
 
+  async cleanInactiveSessions() {
+    const oneMinuteMs = 1 * 60 * 1000;
+    const now = Date.now();
+
+    for (const session of this.sessions.values()) {
+      if (!session.connected && session.disconnectedSince) {
+        const inactiveTime = now - session.disconnectedSince;
+        if (inactiveTime > oneMinuteMs) {
+          logger.warn(`[CLEANUP] Session ${session.sessionId} has been disconnected/unconnected for more than 1 minute. Deleting...`);
+          
+          const numberId = session.numberId;
+          const sessionId = session.sessionId;
+
+          // Completely close the session and delete files
+          await this.closeSession(numberId, true);
+          
+          // Notify the backend that the session has been deleted due to inactivity
+          try {
+            await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+              action: 'deleted_inactivity',
+              numberId: numberId,
+              sessionId: sessionId,
+              timestamp: Date.now(),
+            });
+            
+            await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
+              numberId: numberId,
+              status: 'DISCONNECTED',
+              reason: 'Deleted due to 1 minute inactivity',
+            });
+          } catch (pubError) {
+            logger.error(`[CLEANUP] Failed to publish inactivity deletion events for ${sessionId}:`, pubError);
+          }
+        }
+      }
+    }
+  }
+
   getActiveSessions() {
     return Array.from(this.sessions.values()).map((s) => ({
       sessionId: s.sessionId,
       numberId: s.numberId,
       phoneNumber: s.phoneNumber,
       connected: s.connected,
-      isReady: s.isReady
+      isReady: s.isReady,
+      disconnectedSince: s.disconnectedSince
     }));
   }
 
