@@ -413,7 +413,12 @@ class SessionManager {
 
       return {
         success: true,
-        messageId: result?.id?.id || 'UNKNOWN',
+        // null (not a sentinel string like 'UNKNOWN'): whatsapp_message_id has a unique
+        // DB constraint on the backend, and Postgres allows any number of NULLs in a
+        // unique column but only one row can ever hold a given non-null string — a fixed
+        // placeholder collides on the second message that lacks a real WWebJS id and
+        // rolls back that message's whole status update (see backend DataIntegrityViolationException).
+        messageId: result?.id?.id || null,
       };
     } catch (error) {
       const errorMessage = error.message || '';

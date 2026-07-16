@@ -172,7 +172,10 @@ class MessageHandler {
           id: messageId, // Some backends map 'id' automatically
           messageId: messageId,
           status: 'SENT',
-          whatsappMessageId: result.messageId || 'UNKNOWN',
+          // null, not a fixed placeholder: whatsappMessageId is unique in the backend DB,
+          // and a repeated non-null sentinel collides across messages that all lack a
+          // real WWebJS id, rolling back that message's status update on the backend.
+          whatsappMessageId: result.messageId || null,
           timestamp: new Date().toISOString(), // Standard IO String
         };
 
