@@ -177,17 +177,23 @@ class SessionManager {
         timestamp: Date.now(),
       });
 
+      // Deliberately NOT deleting the session from `this.sessions` here, even for LOGOUT.
+      // Doing so used to remove the number from getActiveSessions() permanently, so
+      // HealthHandler's health check loop stopped seeing it and never attempted an
+      // auto-reconnect again — the number silently went dark until someone noticed a
+      // failed message and manually triggered a reconnect. Auth files on disk become
+      // stale after a real logout regardless, but createSession's existing "not
+      // connected/ready" recreation path (backed by the same client/QR flow) is exactly
+      // what should retry it, the same as any other disconnect reason.
       if (reason === 'LOGOUT') {
-        logger.info(`Session ${sessionId} logged out, cleaning up memory...`);
-        this.sessions.delete(sessionId);
-      } else {
-        // Also report as health issue if it's not a voluntary logout
-        await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
-          numberId: session.numberId,
-          status: 'DISCONNECTED',
-          reason: reason,
-        });
+        logger.info(`Session ${sessionId} logged out, will attempt auto-reconnect via health check`);
       }
+
+      await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
+        numberId: session.numberId,
+        status: 'DISCONNECTED',
+        reason: reason,
+      });
     });
 
     // Auth Failure Event
