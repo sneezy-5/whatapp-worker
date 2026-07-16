@@ -2,6 +2,7 @@ import sessionManager from '../services/sessionManager.js';
 import rabbitmq from '../services/rabbitMQService.js';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
+import { withTimeout } from '../utils/helpers.js';
 
 class HealthHandler {
   constructor() {
@@ -37,8 +38,31 @@ class HealthHandler {
 
     logger.debug(`Performing health check on ${sessions.length} sessions`);
 
-    for (const session of sessions) {
-      await this.checkSession(session);
+    // Run checks in parallel, not sequentially: a single session stuck on a
+    // frozen Chromium tab must not block health checks (and therefore
+    // auto-reconnect) for every other session on this worker.
+    await Promise.allSettled(sessions.map((session) => this.checkSession(session)));
+  }
+
+  // Shared by both the "disconnected" and the "stuck-but-reports-connected" paths below.
+  // Respects a 5 minute cooldown per session and defers to sessionManager.createSession's
+  // own sendInProgress guard, so this can be called freely without storming reconnects.
+  attemptReconnect(numberId, sessionId, { force = false } = {}) {
+    const sessionObj = sessionManager.getSession(numberId);
+    if (!sessionObj || sessionObj.qrCode) return;
+
+    const now = Date.now();
+    const cooldown = 5 * 60 * 1000; // 5 minutes cooldown
+
+    if (now - (sessionObj.lastReconnectAttempt || 0) > cooldown) {
+      sessionObj.lastReconnectAttempt = now;
+      logger.info(`[HEALTH] Attempting automatic reconnection/re-initialization for session ${sessionId}${force ? ' (forced)' : ''}...`);
+      // Run in background to avoid blocking health checks
+      sessionManager.createSession(numberId, sessionObj.phoneNumber, { force }).catch(reconnectError => {
+        logger.error(`[HEALTH] Failed to auto-reconnect session ${sessionId}:`, reconnectError);
+      });
+    } else {
+      logger.debug(`[HEALTH] Cooldown active for auto-reconnect of session ${sessionId}. Skipping...`);
     }
   }
 
@@ -56,22 +80,7 @@ class HealthHandler {
         });
 
         // Try to automatically reconnect if it's NOT waiting for a QR scan
-        const sessionObj = sessionManager.getSession(numberId);
-        if (sessionObj && !sessionObj.qrCode) {
-          const now = Date.now();
-          const cooldown = 5 * 60 * 1000; // 5 minutes cooldown
-          
-          if (now - (sessionObj.lastReconnectAttempt || 0) > cooldown) {
-            sessionObj.lastReconnectAttempt = now;
-            logger.info(`[HEALTH] Attempting automatic reconnection/re-initialization for session ${sessionId}...`);
-            // Run in background to avoid blocking health checks
-            sessionManager.createSession(numberId, sessionObj.phoneNumber).catch(reconnectError => {
-              logger.error(`[HEALTH] Failed to auto-reconnect session ${sessionId}:`, reconnectError);
-            });
-          } else {
-            logger.debug(`[HEALTH] Cooldown active for auto-reconnect of session ${sessionId}. Skipping...`);
-          }
-        }
+        this.attemptReconnect(numberId, sessionId);
 
         return;
       }
@@ -88,8 +97,14 @@ class HealthHandler {
         throw new Error('Client not ready');
       }
 
-      // Verify the client state
-      const state = await sessionObj.client.getState();
+      // Verify the client state. Timeout it: a frozen Chromium tab makes this hang
+      // forever with no error, which otherwise leaves the session marked healthy
+      // (connected=true/isReady=true) while actually dead until the process restarts.
+      const state = await withTimeout(
+        sessionObj.client.getState(),
+        config.whatsapp.messageTimeout,
+        `getState for ${sessionId}`
+      );
       if (state !== 'CONNECTED') {
         throw new Error(`Client state is ${state}`);
       }
@@ -110,6 +125,15 @@ class HealthHandler {
         status: 'UNHEALTHY',
         reason: error.message,
       });
+
+      // We only get here when `session.connected` was already true (the
+      // disconnected path returns early above), meaning the in-memory state
+      // still says "healthy" while the real client is stuck/dead (frozen
+      // Chromium tab, getState timeout, missing session object, etc). Without
+      // this, that mismatch never self-corrects and only a full service
+      // restart clears it — trigger the same auto-reconnect the disconnected
+      // path uses instead of just reporting the failure forever.
+      this.attemptReconnect(session.numberId, session.sessionId, { force: true });
     }
   }
 

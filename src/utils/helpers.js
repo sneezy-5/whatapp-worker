@@ -26,6 +26,21 @@ export function sleep(ms) {
 }
 
 /**
+ * Reject with a timeout error if the given promise doesn't settle in time.
+ * Needed because Puppeteer/WWebJS calls can hang forever on a frozen browser
+ * tab (no CDP-level timeout in front of them), which otherwise blocks the
+ * caller indefinitely with no error and no recovery.
+ */
+export function withTimeout(promise, ms, label = 'operation') {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${label}`)), ms);
+  });
+
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+/**
  * Retry function with exponential backoff
  */
 export async function retry(fn, options = {}) {

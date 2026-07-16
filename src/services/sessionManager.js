@@ -7,6 +7,7 @@ import path from 'path';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
 import rabbitmq from '../services/rabbitMQService.js';
+import { withTimeout } from '../utils/helpers.js';
 
 class SessionManager {
   constructor() {
@@ -20,7 +21,7 @@ class SessionManager {
     }
   }
 
-  async createSession(numberId, phoneNumber) {
+  async createSession(numberId, phoneNumber, { force = false } = {}) {
     // Clean phone number to remove invalid characters for clientId
     const cleanPhoneNumber = phoneNumber.replace(/[^a-zA-Z0-9_-]/g, '');
     const sessionId = `session_${numberId}_${cleanPhoneNumber}`;
@@ -33,11 +34,19 @@ class SessionManager {
     const lastReconnectAttempt = existingSession ? (existingSession.lastReconnectAttempt || 0) : 0;
 
     if (this.sessions.has(sessionId)) {
-      if (existingSession.connected && existingSession.isReady) {
+      // `force` is used when the caller already confirmed (e.g. a getState() timeout)
+      // that this session is stuck despite connected/isReady still reading true —
+      // those flags only flip on WWebJS events that a frozen Chromium tab never fires,
+      // so the normal fast-path below would otherwise wrongly skip recreation forever.
+      if (existingSession.connected && existingSession.isReady && !force) {
         logger.warn(`[CREATE SESSION] Session ${sessionId} already exists and is connected, returning existing session`);
         return existingSession;
       }
-      logger.warn(`[CREATE SESSION] Session ${sessionId} exists in memory but is not connected/ready. Closing and recreating...`);
+      if (existingSession.sendInProgress > 0) {
+        logger.warn(`[CREATE SESSION] Session ${sessionId} has a send in progress, skipping recreation this cycle`);
+        return existingSession;
+      }
+      logger.warn(`[CREATE SESSION] Session ${sessionId} exists in memory but is not connected/ready${force ? ' (forced)' : ''}. Closing and recreating...`);
       await this.closeSession(numberId, false);
     }
 
@@ -71,7 +80,12 @@ class SessionManager {
       puppeteer: {
         headless: true,
         args: puppeteerArgs,
-        protocolTimeout: 0,
+        // protocolTimeout was previously 0 (disabled). That means a frozen/crashed
+        // Chromium tab makes every CDP call (getState, sendMessage, destroy...) hang
+        // forever with no error — the classic "message never sends, only a full
+        // service restart fixes it" symptom. Give it a generous but finite ceiling
+        // per low-level command instead.
+        protocolTimeout: 120000,
       }
     });
 
@@ -84,7 +98,8 @@ class SessionManager {
       qrCode: null,
       isReady: false,
       disconnectedSince: Date.now(),
-      lastReconnectAttempt: lastReconnectAttempt || Date.now()
+      lastReconnectAttempt: lastReconnectAttempt || Date.now(),
+      sendInProgress: 0
     };
 
     this.sessions.set(sessionId, session);
@@ -262,6 +277,11 @@ class SessionManager {
       throw new Error(`Session not ready for number ID: ${numberId}. Status: connected=${session.connected}, ready=${session.isReady}`);
     }
 
+    // Mark this session as busy so a concurrent auto-reconnect (triggered by a
+    // 'disconnected' event or health check firing mid-send) doesn't destroy the
+    // client out from under this in-flight send.
+    session.sendInProgress = (session.sendInProgress || 0) + 1;
+
     const formattedRecipient = recipient.includes('@')
       ? recipient
       : `${recipient}@c.us`;
@@ -270,7 +290,11 @@ class SessionManager {
 
     try {
       // 1. Check real connection state
-      const state = await session.client.getState();
+      const state = await withTimeout(
+        session.client.getState(),
+        config.whatsapp.messageTimeout,
+        `getState for ${numberId}`
+      );
       logger.info(`[SEND] Client state for ${numberId}: ${state}`);
 
       if (state !== 'CONNECTED') {
@@ -278,7 +302,11 @@ class SessionManager {
       }
 
       // 2. Validate Number via WhatsApp API (Crucial!)
-      const numberDetails = await session.client.getNumberId(formattedRecipient);
+      const numberDetails = await withTimeout(
+        session.client.getNumberId(formattedRecipient),
+        config.whatsapp.messageTimeout,
+        `getNumberId for ${formattedRecipient}`
+      );
 
       if (!numberDetails) {
         logger.error(`[SEND] Number not found on WhatsApp: ${formattedRecipient}`);
@@ -292,37 +320,57 @@ class SessionManager {
 
       let result;
 
-      // 3. Ensure Chat exists (helps with syncing)
-      // Use exactId which is guaranteed to be correct
-      // 3. Ensure Chat exists and is loaded
+      // 3. Ensure Chat exists and is loaded, then patch sendSeen on it.
+      // EXTREME FIX: WWebJS tries to mark the chat as read/seen before sending, and throws
+      // 'markedUnread' when the internal property is missing on chats that were never opened.
+      // This affects every message type, not just text, so the chat object (and its patch)
+      // is shared by all branches below via sendViaChatOrClient.
+      let chatObj = null;
       try {
-        const chat = await session.client.getChatById(exactId);
-        logger.debug(`[SEND] Chat found: ${chat.name || 'Unknown'} (${chat.id._serialized})`);
+        chatObj = await withTimeout(
+          session.client.getChatById(exactId),
+          config.whatsapp.messageTimeout,
+          `getChatById for ${exactId}`
+        );
+        logger.debug(`[SEND] Chat found: ${chatObj.name || 'Unknown'} (${chatObj.id._serialized})`);
 
         // REFRESH: Fetch last message to force-load chat memory and avoid 'markedUnread' on undefined
-        await chat.fetchMessages({ limit: 1 }).catch(e => logger.debug(`Fetch error (ignorable): ${e.message}`));
+        await withTimeout(
+          chatObj.fetchMessages({ limit: 1 }),
+          config.whatsapp.messageTimeout,
+          `fetchMessages for ${exactId}`
+        ).catch(e => logger.debug(`Fetch error (ignorable): ${e.message}`));
 
         // Small delay to ensure sync
         await new Promise(resolve => setTimeout(resolve, 500));
+
+        chatObj.sendSeen = async () => true;
       } catch (e) {
         logger.warn(`[SEND] Could not get/load chat object, attempting direct send anyway: ${e.message}`);
+        chatObj = null;
       }
+
+      const sendViaChatOrClient = async (media, options) => {
+        try {
+          if (!chatObj) throw new Error('No chat object available');
+          return await withTimeout(
+            chatObj.sendMessage(media, options),
+            config.whatsapp.messageTimeout,
+            `chat.sendMessage for ${exactId}`
+          );
+        } catch (patchError) {
+          logger.warn(`[SEND] Sending via chat object failed, fallback to direct client send: ${patchError.message}`);
+          return await withTimeout(
+            session.client.sendMessage(exactId, media, options),
+            config.whatsapp.messageTimeout,
+            `client.sendMessage for ${exactId}`
+          );
+        }
+      };
 
       switch (type.toLowerCase()) {
         case 'text':
-          // EXTREME FIX: Monkey-patch sendSeen on the Chat object to avoid 'markedUnread' crash
-          // The crash happens because WWebJS tries to mark the chat as read/seen, but the internal property is missing.
-          try {
-            const chatObj = await session.client.getChatById(exactId);
-            // Disable sendSeen for this specific send operation
-            chatObj.sendSeen = async () => true;
-
-            // Now send using the chat object which has the safe sendSeen
-            result = await chatObj.sendMessage(content);
-          } catch (patchError) {
-            logger.warn(`[SEND] Patching/sending failed, fallback to direct client send: ${patchError.message}`);
-            result = await session.client.sendMessage(exactId, content);
-          }
+          result = await sendViaChatOrClient(content);
           break;
 
         case 'image':
@@ -330,9 +378,7 @@ class SessionManager {
             throw new Error('Media URL is required for image messages');
           }
           const imageMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(exactId, imageMedia, {
-            caption: content
-          });
+          result = await sendViaChatOrClient(imageMedia, { caption: content });
           break;
 
         case 'video':
@@ -340,9 +386,7 @@ class SessionManager {
             throw new Error('Media URL is required for video messages');
           }
           const videoMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(exactId, videoMedia, {
-            caption: content
-          });
+          result = await sendViaChatOrClient(videoMedia, { caption: content });
           break;
 
         case 'document':
@@ -350,9 +394,7 @@ class SessionManager {
             throw new Error('Media URL is required for document messages');
           }
           const docMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(exactId, docMedia, {
-            caption: content
-          });
+          result = await sendViaChatOrClient(docMedia, { caption: content });
           break;
 
         case 'audio':
@@ -360,7 +402,7 @@ class SessionManager {
             throw new Error('Media URL is required for audio messages');
           }
           const audioMedia = await MessageMedia.fromUrl(mediaUrl);
-          result = await session.client.sendMessage(exactId, audioMedia);
+          result = await sendViaChatOrClient(audioMedia);
           break;
 
         default:
@@ -371,7 +413,7 @@ class SessionManager {
 
       return {
         success: true,
-        messageId: result.id.id,
+        messageId: result?.id?.id || 'UNKNOWN',
       };
     } catch (error) {
       const errorMessage = error.message || '';
@@ -396,6 +438,8 @@ class SessionManager {
 
       logger.error(`Error sending message to ${recipient}:`, error);
       throw error;
+    } finally {
+      session.sendInProgress = Math.max(0, (session.sendInProgress || 1) - 1);
     }
   }
 
@@ -437,12 +481,24 @@ class SessionManager {
     try {
       // Remove all listeners to prevent reconnection attempts during destruction
       if (session.client) {
-        // WWebJS doesn't have a direct removeAllListeners on the internal emitter easily, 
+        // WWebJS doesn't have a direct removeAllListeners on the internal emitter easily,
         // but destroy() usually handles it. Still, we stop it first.
-        await session.client.destroy();
+        // destroy() talks to the same Chromium tab as every other client call, so a frozen
+        // tab makes it hang forever too — timeout it and force-kill the browser process
+        // directly so a stuck session doesn't permanently block reconnection.
+        await withTimeout(session.client.destroy(), 15000, `client.destroy for ${sessionId}`);
       }
     } catch (error) {
-      logger.error(`[CLOSE SESSION] Error destroying client for ${sessionId}:`, error);
+      logger.error(`[CLOSE SESSION] Error destroying client for ${sessionId}, force-killing browser process:`, error);
+      try {
+        const browser = session.client?.pupBrowser;
+        const proc = browser?.process?.();
+        if (proc && !proc.killed) {
+          proc.kill('SIGKILL');
+        }
+      } catch (killError) {
+        logger.error(`[CLOSE SESSION] Failed to force-kill browser process for ${sessionId}:`, killError);
+      }
     }
 
     this.sessions.delete(sessionId);
@@ -486,7 +542,7 @@ class SessionManager {
     const now = Date.now();
 
     for (const session of this.sessions.values()) {
-      if (!session.connected && session.disconnectedSince) {
+      if (!session.connected && session.disconnectedSince && !(session.sendInProgress > 0)) {
         const inactiveTime = now - session.disconnectedSince;
         if (inactiveTime > oneMinuteMs) {
           logger.warn(`[CLEANUP] Session ${session.sessionId} has been disconnected/unconnected for more than 1 minute. Deleting...`);

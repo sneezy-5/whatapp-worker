@@ -118,7 +118,10 @@ class RabbitMQService {
   }
 
   async publish(queue, data) {
-    if (!this.connected) throw new Error("RabbitMQ not connected");
+    if (!this.connected || !this.channel) {
+      logger.warn(`RabbitMQ not connected, dropping message for ${queue}`);
+      return;
+    }
 
     const content = Buffer.from(JSON.stringify(data));
 
