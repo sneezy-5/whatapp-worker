@@ -2,7 +2,7 @@
 
 Worker Node.js qui orchestre un conteneur **[WAHA](https://waha.devlike.pro/)** (WhatsApp HTTP API) par numéro WhatsApp, et fait le pont entre RabbitMQ (backend Java) et l'API REST/webhooks de ces conteneurs.
 
-> 🆕 **Migration depuis whatsapp-web.js** : ce worker pilotait auparavant WhatsApp directement via whatsapp-web.js + Puppeteer/Chromium (sujet aux freezes d'onglet). Il délègue maintenant tout le pilotage WhatsApp à WAHA (moteur `NOWEB`, sans navigateur), ce qui rend le worker lui-même très léger.
+> 🆕 **Migration depuis whatsapp-web.js** : ce worker pilotait auparavant WhatsApp directement via whatsapp-web.js + Puppeteer/Chromium (sujet aux freezes d'onglet). Il délègue maintenant tout le pilotage WhatsApp à WAHA, en conteneurs isolés par numéro (moteur `WEBJS` - un vrai navigateur, comme avant, mais chaque numéro dans son propre conteneur : un plantage n'affecte plus que ce numéro, pas tout le worker). Les moteurs sans navigateur de WAHA (`NOWEB`, `GOWS`) ont été testés d'abord mais se sont révélés peu fiables pour la livraison réelle des messages.
 
 ## 🚀 Fonctionnalités
 
@@ -255,7 +255,7 @@ docker volume rm waha_session_<numberId>
 
 ## 📈 Performance
 
-Le moteur WAHA `NOWEB` ne lance pas de navigateur, ce qui allège fortement le worker par rapport à l'ancienne intégration whatsapp-web.js/Puppeteer. Chaque numéro tourne dans son propre conteneur WAHA, donc la consommation mémoire évolue avec le nombre de conteneurs plutôt qu'avec le process worker lui-même.
+Le moteur WAHA `WEBJS` lance un Chromium par conteneur (comme l'ancienne intégration whatsapp-web.js), donc le coût mémoire par numéro reste comparable à avant - la différence est l'isolation : chaque numéro tourne dans son propre conteneur WAHA, donc un plantage/blocage n'affecte que ce numéro, et le process worker lui-même reste très léger puisqu'il ne fait qu'orchestrer et parler REST/webhooks, plus aucun Puppeteer partagé entre numéros.
 
 ## 🔐 Sécurité
 
@@ -281,9 +281,9 @@ pm2 startup
 
 Ce worker orchestre [WAHA](https://waha.devlike.pro/) (WhatsApp HTTP API) :
 
-- Moteur `NOWEB` : pas de navigateur, empreinte mémoire réduite
+- Moteur `WEBJS` : vrai navigateur Chromium par session, le plus fiable pour la livraison réelle des messages
 - API REST simple pour l'envoi et la gestion des sessions
-- Webhooks pour les événements (statut de session, messages entrants)
+- Webhooks pour les événements (statut de session, messages entrants, accusés de réception `message.ack`)
 
 ## 📞 Support
 

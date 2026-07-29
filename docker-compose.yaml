@@ -8,7 +8,7 @@ services:
       RABBITMQ_URL: amqp://guest:guest@213.199.54.136:5672
       NODE_ENV: production
       WAHA_IMAGE: devlikeapro/waha:latest
-      WAHA_ENGINE: GOWS
+      WAHA_ENGINE: WEBJS
       DOCKER_NETWORK: waha-network
       WEBHOOK_PORT: "3001"
       WORKER_PUBLIC_URL: http://worker:3001

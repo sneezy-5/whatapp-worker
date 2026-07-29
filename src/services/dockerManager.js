@@ -54,10 +54,13 @@ class DockerManager {
         name,
         Image: config.waha.image,
         Env: [
-          // NOWEB has a known, unresolved upstream bug where the socket can
-          // drop mid-send during USync device resolution, taking the whole
-          // session down (https://github.com/devlikeapro/waha/issues/531).
-          // GOWS is the other browser-less engine, worth trying instead.
+          // NOWEB and GOWS (the two browser-less engines) both proved
+          // unreliable at actually delivering messages here (NOWEB: known
+          // upstream USync/socket crash, https://github.com/devlikeapro/waha/issues/531;
+          // GOWS: same symptom, messages accepted by the API but never
+          // delivered). WEBJS drives a real Chromium/WhatsApp Web session -
+          // heavier, but WhatsApp can't distinguish it from an actual
+          // browser, unlike the reverse-engineered wire-protocol engines.
           `WHATSAPP_DEFAULT_ENGINE=${config.waha.engine}`,
           `WHATSAPP_HOOK_URL=${config.waha.webhookBaseUrl}/waha-webhook/${numberId}`,
           'WHATSAPP_HOOK_EVENTS=session.status,message,message.ack',
@@ -73,6 +76,10 @@ class DockerManager {
           RestartPolicy: { Name: 'unless-stopped' },
           NetworkMode: config.waha.network,
           Binds: [`${volumeName(numberId)}:/app/.sessions`],
+          // WEBJS runs a real Chromium instance - the default 64MB /dev/shm
+          // is not enough and causes random tab crashes under load (the
+          // same reason the old whatsapp-web.js worker set shm_size: 2gb).
+          ShmSize: 1024 * 1024 * 1024,
         },
       });
       await created.start();
