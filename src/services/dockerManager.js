@@ -58,6 +58,11 @@ class DockerManager {
           `WHATSAPP_HOOK_URL=${config.waha.webhookBaseUrl}/waha-webhook/${numberId}`,
           'WHATSAPP_HOOK_EVENTS=session.status,message',
           'WAHA_PRINT_QR=false',
+          // Auth disabled: this container is only reachable from the worker
+          // over the dedicated internal waha-network, never exposed to the
+          // host or internet.
+          'WAHA_API_KEY=',
+          'WAHA_NO_API_KEY=True',
         ],
         Labels: { [MANAGED_LABEL]: String(numberId), [PHONE_LABEL]: String(phoneNumber) },
         HostConfig: {
