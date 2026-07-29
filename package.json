@@ -1,21 +1,19 @@
 {
   "name": "whatsapp-worker",
-  "version": "1.0.0",
-  "description": "WhatsApp Worker with whatsapp-web.js for message handling",
+  "version": "2.0.0",
+  "description": "WhatsApp Worker orchestrating per-number WAHA containers for message handling",
   "main": "src/worker.js",
   "type": "module",
   "scripts": {
     "start": "node src/worker.js",
     "dev": "nodemon src/worker.js",
     "test": "jest",
-    "test:whatsapp": "node test-whatsapp.js",
-    "cleanup": "node cleanup-sessions.js",
-    "check-updates": "node check-updates.js",
+    "check-sessions": "node check-sessions.js",
     "lint": "eslint src/"
   },
   "keywords": [
     "whatsapp",
-    "whatsapp-web.js",
+    "waha",
     "worker",
     "rabbitmq"
   ],
@@ -24,14 +22,12 @@
   "dependencies": {
     "amqplib": "^0.10.3",
     "axios": "^1.6.2",
+    "dockerode": "^4.0.2",
     "dotenv": "^16.3.1",
+    "express": "^4.19.2",
     "pino": "^8.16.2",
     "pino-pretty": "^10.2.3",
-    "puppeteer": "^22.15.0",
-    "qrcode": "^1.5.3",
-    "qrcode-terminal": "^0.12.0",
-    "uuid": "^9.0.1",
-    "whatsapp-web.js": "github:pedroslopez/whatsapp-web.js#main"
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "eslint": "^8.55.0",

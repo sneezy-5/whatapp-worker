@@ -5,6 +5,7 @@ import rabbitmq from '../src/services/rabbitMQService.js';
 import sessionManager from './services/sessionManager.js';
 import messageHandler from './handles/MessageHandler.js';
 import healthHandler from './handles/HealthHandler.js';
+import webhookServer from './webhookServer.js';
 
 class WhatsAppWorker {
   constructor() {
@@ -32,6 +33,9 @@ class WhatsAppWorker {
         });
         throw rabbitError;  // Re-throw to be caught by outer catch
       }
+
+      // Start the webhook server that receives WAHA container callbacks
+      webhookServer.start();
 
       // Start consuming messages
       console.log('\n========================================');
@@ -297,6 +301,8 @@ class WhatsAppWorker {
       // Close all WhatsApp sessions
       logger.info('Closing all sessions...');
       await sessionManager.closeAllSessions();
+
+      webhookServer.stop();
 
       // Close RabbitMQ connection only if it was connected
       if (this.rabbitmqConnected) {

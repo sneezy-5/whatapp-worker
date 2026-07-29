@@ -1,45 +1,39 @@
-# WhatsApp Worker - whatsapp-web.js
+# WhatsApp Worker - WAHA orchestrator
 
-Worker Node.js avec **whatsapp-web.js** pour gérer les connexions WhatsApp et l'envoi de messages.
+Worker Node.js qui orchestre un conteneur **[WAHA](https://waha.devlike.pro/)** (WhatsApp HTTP API) par numéro WhatsApp, et fait le pont entre RabbitMQ (backend Java) et l'API REST/webhooks de ces conteneurs.
 
-> ⚠️ **Migration depuis Baileys** : Ce projet a été migré de Baileys vers whatsapp-web.js. Voir [MIGRATION.md](./MIGRATION.md) pour les détails.
+> 🆕 **Migration depuis whatsapp-web.js** : ce worker pilotait auparavant WhatsApp directement via whatsapp-web.js + Puppeteer/Chromium (sujet aux freezes d'onglet). Il délègue maintenant tout le pilotage WhatsApp à WAHA (moteur `NOWEB`, sans navigateur), ce qui rend le worker lui-même très léger.
 
 ## 🚀 Fonctionnalités
 
-- ✅ Connexion WhatsApp via whatsapp-web.js (client web officiel)
+- ✅ Un conteneur WAHA par numéro WhatsApp, créé/géré dynamiquement (Docker Engine API)
 - ✅ Support QR Code pour authentification
 - ✅ Envoi de messages (texte, image, vidéo, document, audio)
-- ✅ Réception de messages en temps réel
+- ✅ Réception de messages en temps réel (webhooks WAHA)
 - ✅ Gestion multi-sessions (plusieurs numéros)
 - ✅ Health checks automatiques
 - ✅ Reconnexion automatique
-- ✅ Communication RabbitMQ avec le backend
+- ✅ Communication RabbitMQ avec le backend (contrat de queues inchangé)
 - ✅ Logs structurés avec Pino
-- ✅ Support Docker avec Chromium
 
 ## 📋 Prérequis
 
 - Node.js 18+
+- Docker (le worker a besoin d'accéder au socket Docker de l'hôte pour créer les conteneurs WAHA)
 - RabbitMQ
 - Backend Java (pour recevoir les commandes)
-- **Chromium** (installé automatiquement par whatsapp-web.js)
 
 ## 🛠️ Installation
 
 ### 1. Cloner et Installer
 
 ```bash
-# Cloner le projet
 git clone <votre-repo>
 cd whatsapp-worker
-
-# Installer les dépendances
 npm install
 ```
 
 ### 2. Configuration
-
-Copier `.env.example` vers `.env` et configurer :
 
 ```bash
 cp .env.example .env
@@ -52,7 +46,11 @@ WORKER_ID=1
 WORKER_NAME="WhatsApp Worker 1"
 
 RABBITMQ_URL=amqp://guest:guest@localhost:5672
-BACKEND_API_URL=http://localhost:8080/api
+
+WAHA_IMAGE=devlikeapro/waha:latest
+DOCKER_NETWORK=whatsapp-network
+WEBHOOK_PORT=3001
+WORKER_PUBLIC_URL=http://worker:3001
 
 LOG_LEVEL=info
 NODE_ENV=development
@@ -60,15 +58,16 @@ NODE_ENV=development
 
 ### 3. Démarrer
 
+En local (hors Docker), le worker a quand même besoin d'un Docker daemon accessible (Docker Desktop) pour créer les conteneurs WAHA, et le réseau `whatsapp-network` doit exister :
+
 ```bash
+docker network create whatsapp-network
+
 # Développement (avec hot reload)
 npm run dev
 
 # Production
 npm start
-
-# Test whatsapp-web.js
-npm run test:whatsapp
 ```
 
 ## 📁 Structure du Projet
@@ -80,26 +79,26 @@ whatsapp-worker/
 │   │   └── config.js              # Configuration centralisée
 │   ├── services/
 │   │   ├── rabbitMQService.js     # Service RabbitMQ
-│   │   └── sessionManager.js      # Gestion des sessions whatsapp-web.js
+│   │   ├── dockerManager.js       # Crée/gère les conteneurs WAHA (un par numéro)
+│   │   ├── wahaClient.js          # Client REST vers l'API WAHA d'un conteneur
+│   │   └── sessionManager.js      # Etat des sessions + orchestration WAHA
 │   ├── handles/
 │   │   ├── MessageHandler.js      # Handler messages
 │   │   └── HealthHandler.js       # Handler health checks
 │   ├── utils/
 │   │   └── logger.js              # Logger Pino
+│   ├── webhookServer.js           # Reçoit les webhooks des conteneurs WAHA
 │   └── worker.js                  # Point d'entrée
-├── sessions/                      # Sessions WhatsApp (auth data)
-├── .wwebjs_auth/                  # Authentification whatsapp-web.js
-├── test-whatsapp.js               # Script de test
-├── cleanup-sessions.js            # Script de nettoyage
 ├── .env.example                   # Template variables env
 ├── package.json
-├── Dockerfile
-├── MIGRATION.md                   # Documentation migration
-├── QUICKSTART.md                  # Guide démarrage rapide
+├── DockerFile
+├── docker-compose.yaml
 └── README.md
 ```
 
 ## 🔌 Communication RabbitMQ
+
+Le contrat de queues est identique à l'ancienne version whatsapp-web.js — **aucun changement côté backend Java**.
 
 ### Queues Consommées
 
@@ -136,7 +135,7 @@ whatsapp-worker/
 }
 ```
 
-Actions disponibles : `create`, `close`, `reconnect`, `regenerate_qr`
+Actions disponibles : `create`, `close`, `delete`, `reconnect`, `regenerate_qr`
 
 ### Queues Publiées
 
@@ -151,7 +150,7 @@ Actions disponibles : `create`, `close`, `reconnect`, `regenerate_qr`
 }
 ```
 
-Actions : `qr_generated`, `connected`, `disconnected`, `error`
+Actions : `qr_generated`, `connected`, `disconnected`, `error`, `deleted_inactivity`, `worker_status`
 
 **2. `whatsapp.number.health`** - Statuts numéros
 ```json
@@ -164,12 +163,11 @@ Actions : `qr_generated`, `connected`, `disconnected`, `error`
 
 Statuts : `HEALTHY`, `UNHEALTHY`, `DISCONNECTED`, `NOT_FOUND`, `BANNED`
 
-**3. `whatsapp.message.receive`** - Messages reçus
+**3. `whatsapp.message.receive`** - Messages reçus (et statuts d'envoi)
 ```json
 {
   "sessionId": "session_1_225XXXXX",
   "numberId": 1,
-  "messageId": "3EB0XXXXX",
   "from": "225YYYYY@c.us",
   "body": "Hello!",
   "timestamp": 1234567890
@@ -178,245 +176,96 @@ Statuts : `HEALTHY`, `UNHEALTHY`, `DISCONNECTED`, `NOT_FOUND`, `BANNED`
 
 ## 📱 Connexion WhatsApp
 
-### Première Connexion
+### Comment ça marche
 
-1. Démarrer le worker : `npm start`
-2. Envoyer un message `create` via RabbitMQ
-3. Un QR Code sera généré et envoyé au backend
-4. Scanner le QR Code avec WhatsApp sur votre téléphone
-5. La session sera sauvegardée dans `.wwebjs_auth/`
-
-### Sessions Multiples
-
-Chaque numéro WhatsApp a sa propre session :
-
-```
-.wwebjs_auth/
-├── session-session_1_225XXXXX/
-│   └── Default/
-│       ├── IndexedDB/
-│       └── Local Storage/
-├── session-session_2_225YYYYY/
-    └── Default/
-        ├── IndexedDB/
-        └── Local Storage/
-```
+1. Le backend publie un `session.update` (`create`) pour un `numberId`/`phoneNumber`.
+2. Le worker crée (ou redémarre) un conteneur `waha-{numberId}` sur le réseau Docker `whatsapp-network`, avec un volume persistant `waha_session_{numberId}`.
+3. Le conteneur WAHA notifie le worker par webhook (`http://worker:3001/waha-webhook/{numberId}`) de son état (`SCAN_QR_CODE`, `WORKING`, `FAILED`, `STOPPED`).
+4. Sur `SCAN_QR_CODE`, le worker récupère le QR via l'API WAHA et le publie sur `whatsapp.worker.events` (`qr_generated`) — le backend l'affiche pour scan.
+5. Sur `WORKING`, le worker publie `connected` + `HEALTHY`.
+6. La session persiste dans le volume Docker : un redémarrage du worker ou du conteneur WAHA ne nécessite pas de re-scanner le QR (voir `restoreSessions()`).
 
 ## 💬 Types de Messages Supportés
 
-### Texte
-```javascript
-{
-  "type": "text",
-  "content": "Bonjour!",
-  "mediaUrl": null
-}
-```
-
-### Image
-```javascript
-{
-  "type": "image",
-  "content": "Légende de l'image",
-  "mediaUrl": "https://example.com/image.jpg"
-}
-```
-
-### Vidéo
-```javascript
-{
-  "type": "video",
-  "content": "Légende de la vidéo",
-  "mediaUrl": "https://example.com/video.mp4"
-}
-```
-
-### Document
-```javascript
-{
-  "type": "document",
-  "content": "document.pdf",
-  "mediaUrl": "https://example.com/doc.pdf"
-}
-```
-
-### Audio
-```javascript
-{
-  "type": "audio",
-  "content": "",
-  "mediaUrl": "https://example.com/audio.mp3"
-}
-```
+Identique à l'ancienne version : `text`, `image`, `video`, `document`, `audio` avec `content`/`mediaUrl`.
 
 ## 🔍 Health Checks
 
-Le worker effectue des health checks automatiques toutes les minutes :
-
-- Vérifie que les sessions sont connectées
-- Teste l'état du client WhatsApp
-- Rapporte l'état au backend
-- Tente la reconnexion si nécessaire
+Le worker effectue des health checks automatiques toutes les minutes. L'état `connected`/`isReady` de chaque session est maintenu par les webhooks WAHA (pas de polling actif du conteneur nécessaire, contrairement à l'ancien `client.getState()` whatsapp-web.js qui pouvait bloquer indéfiniment sur un onglet Chromium figé).
 
 ## 🐳 Docker
 
 ### Construire l'Image
 
 ```bash
-docker build -t whatsapp-worker:latest .
+docker build -t whatsapp-worker:latest -f DockerFile .
 ```
-
-**Note** : La construction prend plus de temps qu'avant (installation de Chromium)
 
 ### Lancer avec Docker Compose
 
 ```bash
-# Démarrer le worker
+docker network create whatsapp-network   # si pas déjà créé
 docker-compose up -d
-
-# Voir les logs
 docker-compose logs -f worker
-
-# Arrêter
 docker-compose down
 ```
 
 ### Configuration Docker
 
-Le `docker-compose.yaml` inclut :
-- `shm_size: '2gb'` - Requis pour Chromium
-- Volume `worker_auth` - Stockage des sessions
-- Volume `worker_sessions` - Données de session
-
-## 📊 Logs
-
-Les logs sont structurés avec Pino :
-
-```json
-{
-  "level": "info",
-  "time": 1234567890,
-  "msg": "Session session_1_225XXXXX is ready and connected"
-}
-```
-
-Niveaux disponibles :
-- `trace` - Détails très verbeux
-- `debug` - Informations de debug
-- `info` - Informations normales
-- `warn` - Avertissements
-- `error` - Erreurs
-- `fatal` - Erreurs critiques
+Le `docker-compose.yaml` :
+- Monte `/var/run/docker.sock` dans le worker pour qu'il puisse créer/gérer les conteneurs WAHA (équivalent à un accès root sur l'hôte — nécessaire pour l'architecture "un conteneur par numéro").
+- `group_add` doit correspondre au GID du socket Docker de l'hôte (`stat -c '%g' /var/run/docker.sock`).
+- Les conteneurs WAHA eux-mêmes ne sont **pas** déclarés dans ce fichier : ils sont créés dynamiquement par `dockerManager.js`, visibles via `docker ps` (préfixe `waha-`).
 
 ## ⚠️ Gestion des Erreurs
 
-### Reconnexion Automatique
+### Numéro Déconnecté/Échec
 
-Le worker tente automatiquement de se reconnecter en cas de :
-- Perte de connexion réseau
-- Timeout WhatsApp
-- Erreur temporaire
-
-### Numéro Banni/Déconnecté
-
-Si un numéro est banni ou déconnecté :
-1. Le worker détecte la déconnexion
-2. Notifie le backend via `whatsapp.number.health`
-3. Le backend peut remplacer le numéro
+Si un conteneur WAHA passe en `FAILED` ou `STOPPED` :
+1. Le webhook notifie le worker.
+2. Le worker publie `whatsapp.worker.events` (`error`/`disconnected`) et `whatsapp.number.health` (`DISCONNECTED`).
+3. Le health check périodique tente une reconnexion automatique (`createSession`).
 
 ## 🔧 Dépannage
 
-### Chromium ne démarre pas
+### Le conteneur WAHA ne démarre pas
 
 ```bash
-# Linux
-sudo apt-get update
-sudo apt-get install -y chromium-browser
-
-# Le Dockerfile inclut déjà toutes les dépendances
+docker ps -a --filter "name=waha-"
+docker logs waha-<numberId>
 ```
 
 ### QR Code ne s'affiche pas
 
 ```bash
-# Vérifier les logs
-npm start
+# Vérifier que le webhook du worker est bien joignable depuis le conteneur WAHA
+docker exec waha-<numberId> wget -qO- http://worker:3001/waha-webhook/<numberId> || true
 
 # Vérifier la connexion RabbitMQ
 curl http://localhost:15672
 ```
 
-### Session ne se connecte pas
+### Session ne se reconnecte pas
 
 ```bash
-# Nettoyer les sessions
-npm run cleanup
-
-# Ou manuellement
-rm -rf sessions/*
-rm -rf .wwebjs_auth/*
-
-# Redémarrer
-npm start
-```
-
-### Erreur "Protocol error"
-
-```bash
-# Augmenter la mémoire partagée (Docker)
-# Déjà configuré dans docker-compose.yaml
-shm_size: '2gb'
+# Supprimer complètement le conteneur et son volume pour forcer un nouveau QR
+docker rm -f waha-<numberId>
+docker volume rm waha_session_<numberId>
 ```
 
 ## 📈 Performance
 
-### Scalabilité
-
-- Un worker peut gérer 10-20 numéros simultanément
-- Pour plus de numéros, lancer plusieurs workers
-- Chaque worker est indépendant
-
-### Ressources
-
-| Ressource | Baileys | whatsapp-web.js |
-|-----------|---------|-----------------|
-| RAM | ~150 MB | ~400 MB |
-| CPU (idle) | ~1% | ~2-3% |
-| Démarrage | ~3s | ~15s |
-| Stockage/session | ~5 MB | ~20 MB |
-
-**Recommandations** :
-- Minimum 2 GB RAM par worker
-- SSD recommandé pour les sessions
-- Surveiller l'utilisation mémoire
+Le moteur WAHA `NOWEB` ne lance pas de navigateur, ce qui allège fortement le worker par rapport à l'ancienne intégration whatsapp-web.js/Puppeteer. Chaque numéro tourne dans son propre conteneur WAHA, donc la consommation mémoire évolue avec le nombre de conteneurs plutôt qu'avec le process worker lui-même.
 
 ## 🔐 Sécurité
 
-### Sessions
-- Les sessions sont stockées dans `.wwebjs_auth/`
-- Ne jamais commiter les sessions dans Git
-- Sauvegarder régulièrement les sessions
-
-### Variables d'Environnement
-- Ne jamais commiter `.env`
-- Utiliser des secrets pour la production
-- Changer les credentials par défaut
-
-## 📚 whatsapp-web.js
-
-Ce worker utilise [whatsapp-web.js](https://github.com/pedroslopez/whatsapp-web.js) :
-
-- Basé sur le client web officiel WhatsApp
-- Très stable et bien maintenu
-- API riche et complète
-- Support communautaire actif
-- Documentation complète
+- Le worker a un accès équivalent root sur l'hôte via `/var/run/docker.sock` — à isoler sur une machine/VM dédiée à cet usage.
+- Les sessions WAHA sont persistées dans des volumes Docker nommés (`waha_session_{numberId}`) — à sauvegarder régulièrement.
+- Ne jamais commiter `.env`.
 
 ## 🚀 Production
 
-### Recommandations
-
-1. **Utiliser PM2** pour la gestion des processus
+1. **PM2** (hors Docker) reste utilisable pour le process worker, mais le worker doit toujours avoir accès à un daemon Docker.
 ```bash
 npm install -g pm2
 pm2 start src/worker.js --name worker-1
@@ -424,45 +273,22 @@ pm2 save
 pm2 startup
 ```
 
-2. **Configurer les backups** des sessions
-```bash
-# Backup automatique toutes les heures
-0 * * * * tar -czf sessions-backup-$(date +\%Y\%m\%d-\%H).tar.gz .wwebjs_auth/
-```
+2. **Sauvegarder les volumes de sessions** (`waha_session_*`) régulièrement.
 
-3. **Monitoring** avec Prometheus/Grafana
+3. **Monitoring** avec Prometheus/Grafana, `docker ps` pour l'état des conteneurs WAHA.
 
-4. **Load balancing** avec plusieurs workers
+## 📚 WAHA
 
-5. **Surveillance de la mémoire**
-```bash
-# Redémarrer si mémoire > 1GB
-pm2 start src/worker.js --max-memory-restart 1G
-```
-  
-6. **Mise à jour automatique**
-```bash
-npm run check-updates
-```
+Ce worker orchestre [WAHA](https://waha.devlike.pro/) (WhatsApp HTTP API) :
 
-## 🆕 Migration depuis Baileys
-
-Si vous migrez depuis Baileys :
-
-1. **Lire la documentation** : [MIGRATION.md](./MIGRATION.md)
-2. **Guide rapide** : [QUICKSTART.md](./QUICKSTART.md)
-3. **Nettoyer les sessions** : `npm run cleanup`
-4. **Re-scanner les QR codes** pour tous les numéros
-
-⚠️ **Les sessions Baileys ne sont PAS compatibles avec whatsapp-web.js !**
+- Moteur `NOWEB` : pas de navigateur, empreinte mémoire réduite
+- API REST simple pour l'envoi et la gestion des sessions
+- Webhooks pour les événements (statut de session, messages entrants)
 
 ## 📞 Support
 
-Pour toute question :
-- Consulter [MIGRATION.md](./MIGRATION.md) et [QUICKSTART.md](./QUICKSTART.md)
-- Vérifier les logs du worker
-- Tester avec `npm run test:whatsapp`
-- Consulter la [documentation whatsapp-web.js](https://wwebjs.dev/)
+- Consulter les logs du worker (`docker-compose logs -f worker`) et des conteneurs WAHA (`docker logs waha-<numberId>`)
+- [Documentation WAHA](https://waha.devlike.pro/docs/overview/quick-start/)
 
 ## 📄 Licence
 

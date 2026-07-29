@@ -3,16 +3,24 @@ version: '3.8'
 services:
   worker:
     image: whatsapp-worker:latest
-    shm_size: '2gb'  # Necessary for Chromium memory management
     environment:
       RABBITMQ_URL: amqp://guest:guest@213.199.54.136:5672
-      BACKEND_API_URL: http://213.199.54.136:8080/api
       NODE_ENV: production
-      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
-      PUPPETEER_EXECUTABLE_PATH: "/usr/bin/chromium"
+      WAHA_IMAGE: devlikeapro/waha:latest
+      DOCKER_NETWORK: whatsapp-network
+      WEBHOOK_PORT: "3001"
+      WORKER_PUBLIC_URL: http://worker:3001
     volumes:
-      - worker_sessions:/app/sessions
-      - worker_auth:/app/.wwebjs_auth
+      # Lets the worker create/manage sibling WAHA containers via the Docker
+      # Engine API (dockerode) - equivalent to root on the host, required by
+      # the "one WAHA container per number" architecture.
+      - /var/run/docker.sock:/var/run/docker.sock
+    # GID of /var/run/docker.sock on the host (213.199.54.136), so the
+    # non-root nodejs user in the image can talk to the socket. Re-check with
+    # `stat -c '%g' /var/run/docker.sock` if this worker is ever redeployed
+    # on a different host - the GID is host-specific, not portable.
+    group_add:
+      - "989"
     networks:
       - whatsapp-network
     deploy:
@@ -28,17 +36,11 @@ services:
         order: stop-first
       resources:
         limits:
-          cpus: '1.0'
-          memory: 2GB
-        reservations:
           cpus: '0.5'
-          memory: 1GB
-
-volumes:
-  worker_sessions:
-    driver: local
-  worker_auth:
-    driver: local
+          memory: 512MB
+        reservations:
+          cpus: '0.25'
+          memory: 256MB
 
 networks:
   whatsapp-network:

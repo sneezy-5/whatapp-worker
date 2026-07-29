@@ -33,10 +33,17 @@ export const config = {
     apiKey: process.env.BACKEND_API_KEY || '',
   },
 
-  // Sessions
-  sessions: {
-    dir: process.env.SESSION_DIR || join(__dirname, '../../sessions'),
-    timeout: parseInt(process.env.SESSION_TIMEOUT) || 3600000, // 1 hour
+  // WAHA (per-number WhatsApp HTTP API containers)
+  waha: {
+    image: process.env.WAHA_IMAGE || 'devlikeapro/waha:latest',
+    network: process.env.DOCKER_NETWORK || 'whatsapp-network',
+    // Base URL WAHA containers use to reach this worker's webhook server,
+    // resolved via Docker DNS on the shared network (compose service name).
+    webhookBaseUrl: process.env.WORKER_PUBLIC_URL || `http://worker:${process.env.WEBHOOK_PORT || 3001}`,
+  },
+
+  webhookServer: {
+    port: parseInt(process.env.WEBHOOK_PORT) || 3001,
   },
 
   // WhatsApp

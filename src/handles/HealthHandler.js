@@ -2,7 +2,6 @@ import sessionManager from '../services/sessionManager.js';
 import rabbitmq from '../services/rabbitMQService.js';
 import { config } from '../config/config.js';
 import logger from '../utils/logger.js';
-import { withTimeout } from '../utils/helpers.js';
 
 class HealthHandler {
   constructor() {
@@ -85,28 +84,18 @@ class HealthHandler {
         return;
       }
 
-      // Send ping to verify connection
+      // WAHA pushes state changes via webhook (session.status), so unlike the
+      // old whatsapp-web.js/Chromium setup there's no live client to poll and
+      // no risk of a frozen browser tab silently hanging this check - the
+      // in-memory flags are kept in sync by sessionManager.onSessionStatus.
       const sessionObj = sessionManager.getSession(numberId);
 
-      if (!sessionObj || !sessionObj.client) {
+      if (!sessionObj) {
         throw new Error('Session object not found');
       }
 
-      // Check if client is ready (whatsapp-web.js specific)
       if (!sessionObj.isReady) {
-        throw new Error('Client not ready');
-      }
-
-      // Verify the client state. Timeout it: a frozen Chromium tab makes this hang
-      // forever with no error, which otherwise leaves the session marked healthy
-      // (connected=true/isReady=true) while actually dead until the process restarts.
-      const state = await withTimeout(
-        sessionObj.client.getState(),
-        config.whatsapp.messageTimeout,
-        `getState for ${sessionId}`
-      );
-      if (state !== 'CONNECTED') {
-        throw new Error(`Client state is ${state}`);
+        throw new Error('Session not ready');
       }
 
       // If everything is okay, report healthy

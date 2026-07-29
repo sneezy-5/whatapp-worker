@@ -1,12 +1,7 @@
-# Multi-stage build for WhatsApp Worker with whatsapp-web.js
+# Multi-stage build for WhatsApp Worker (WAHA orchestrator)
 FROM node:20-bullseye AS dependencies
 
 WORKDIR /app
-
-# Install dependencies needed for build (git, etc)
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
 
 COPY package*.json ./
 RUN npm install --production && npm cache clean --force
@@ -16,36 +11,18 @@ FROM node:20-bullseye
 
 WORKDIR /app
 
-# Install Chromium and required libraries
 RUN apt-get update && apt-get install -y \
-  chromium \
-  fonts-liberation \
-  libnss3 \
-  libatk-bridge2.0-0 \
-  libx11-xcb1 \
-  libxcomposite1 \
-  libxdamage1 \
-  libxrandr2 \
-  libgbm1 \
-  libasound2 \
-  libpangocairo-1.0-0 \
-  libgtk-3-0 \
-  libxshmfence1 \
   ca-certificates \
   dumb-init \
   --no-install-recommends \
   && rm -rf /var/lib/apt/lists/*
 
-# Environment variables for Puppeteer
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV HOME=/app
 
 # Create necessary directories and set permissions
 RUN groupadd -r nodejs && useradd -r -g nodejs nodejs && \
-    mkdir -p sessions logs .wwebjs_auth /tmp/crashpad && \
-    chmod 777 /tmp/crashpad && \
-    chown -R nodejs:nodejs /app sessions logs .wwebjs_auth
+    mkdir -p logs && \
+    chown -R nodejs:nodejs /app logs
 
 # Copy dependencies
 COPY --from=dependencies /app/node_modules ./node_modules
@@ -53,11 +30,15 @@ COPY --from=dependencies /app/node_modules ./node_modules
 # Copy application code
 COPY --chown=nodejs:nodejs . .
 
-# Switch to non-root user
+# Switch to non-root user. Access to /var/run/docker.sock (mounted at
+# runtime so this worker can orchestrate sibling WAHA containers) is
+# granted via the `group_add` entry in docker-compose.yaml, matching the
+# host's docker group GID - not baked into the image, since that GID
+# varies per host.
 USER nodejs:nodejs
 
-# Expose port
-EXPOSE 3000
+# Webhook server (receives callbacks from WAHA containers)
+EXPOSE 3001
 
 # Use dumb-init
 ENTRYPOINT ["dumb-init", "--"]
