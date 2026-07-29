@@ -7,6 +7,12 @@ import wahaClient from './wahaClient.js';
 class SessionManager {
   constructor() {
     this.sessions = new Map();
+    // WAHA message id -> { messageId, numberId }, so a later message.ack
+    // webhook (real WhatsApp delivery confirmation/failure) can be matched
+    // back to the caller's own messageId. Without this we can only ever
+    // report the optimistic "WAHA accepted the HTTP request" result, which
+    // is not the same as "WhatsApp actually delivered it".
+    this.pendingAcks = new Map();
   }
 
   async createSession(numberId, phoneNumber, { force = false } = {}) {
@@ -79,7 +85,7 @@ class SessionManager {
     }
   }
 
-  async sendMessage(numberId, recipient, content, type = 'text', mediaUrl = null) {
+  async sendMessage(numberId, recipient, content, type = 'text', mediaUrl = null, messageId = null) {
     const session = this.getSession(numberId);
 
     if (!session) {
@@ -127,12 +133,18 @@ class SessionManager {
 
       logger.info(`Message sent successfully to ${recipient}`);
 
+      const waMessageId = result?.id?.id || result?.id || null;
+
+      if (waMessageId && messageId) {
+        this.pendingAcks.set(waMessageId, { messageId, numberId });
+      }
+
       return {
         success: true,
         // null (not a sentinel string): whatsapp_message_id has a unique DB
         // constraint on the backend, a fixed placeholder would collide across
         // messages that all lack a real WAHA id.
-        messageId: result?.id?.id || result?.id || null,
+        messageId: waMessageId,
       };
     } catch (error) {
       const apiMessage = error.response?.data?.message || error.response?.data?.error;
@@ -349,6 +361,41 @@ class SessionManager {
       });
     } catch (error) {
       logger.error('Error publishing incoming message:', error);
+    }
+  }
+
+  /**
+   * Called by the webhook server on message.ack - the real WhatsApp-side
+   * delivery confirmation/failure, as opposed to sendMessage()'s return
+   * value which only means "WAHA's HTTP API accepted the request".
+   */
+  async onMessageAck(numberId, payload) {
+    const waMessageId = payload?.id;
+    if (!waMessageId) return;
+
+    const pending = this.pendingAcks.get(waMessageId);
+    if (!pending) return; // not a message we sent, or already resolved
+
+    const isError = payload.ack === -1 || payload.ackName === 'ERROR';
+    if (!isError) {
+      // Positive ack (SERVER/DEVICE/READ/PLAYED): already reported SENT at
+      // send time, nothing more actionable to tell the backend.
+      this.pendingAcks.delete(waMessageId);
+      return;
+    }
+
+    this.pendingAcks.delete(waMessageId);
+    logger.warn(`[ACK] Message ${pending.messageId} failed delivery (${payload.ackName || payload.ack}) for number ${numberId}`);
+
+    try {
+      await rabbitmq.publish(config.rabbitmq.queues.messageReceive, {
+        messageId: pending.messageId,
+        status: 'FAILED',
+        errorMessage: `WhatsApp delivery failed (${payload.ackName || 'ERROR'})`,
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      logger.error(`Error publishing ack failure for message ${pending.messageId}:`, error);
     }
   }
 }

@@ -129,7 +129,8 @@ class MessageHandler {
             formattedRecipient,
             content,
             type,
-            mediaUrl
+            mediaUrl,
+            messageId
           );
 
           successfulNumber = formattedRecipient;

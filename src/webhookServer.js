@@ -32,6 +32,10 @@ class WebhookServer {
             await sessionManager.onIncomingMessage(numberId, payload);
             break;
 
+          case 'message.ack':
+            await sessionManager.onMessageAck(numberId, payload);
+            break;
+
           default:
             logger.debug(`[WEBHOOK] Ignoring unhandled event: ${event}`);
         }

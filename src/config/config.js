@@ -36,6 +36,7 @@ export const config = {
   // WAHA (per-number WhatsApp HTTP API containers)
   waha: {
     image: process.env.WAHA_IMAGE || 'devlikeapro/waha:latest',
+    engine: process.env.WAHA_ENGINE || 'GOWS',
     network: process.env.DOCKER_NETWORK || 'waha-network',
     // Base URL WAHA containers use to reach this worker's webhook server,
     // resolved via Docker DNS on the shared network (compose service name).

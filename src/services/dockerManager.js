@@ -54,9 +54,13 @@ class DockerManager {
         name,
         Image: config.waha.image,
         Env: [
-          'WHATSAPP_DEFAULT_ENGINE=NOWEB',
+          // NOWEB has a known, unresolved upstream bug where the socket can
+          // drop mid-send during USync device resolution, taking the whole
+          // session down (https://github.com/devlikeapro/waha/issues/531).
+          // GOWS is the other browser-less engine, worth trying instead.
+          `WHATSAPP_DEFAULT_ENGINE=${config.waha.engine}`,
           `WHATSAPP_HOOK_URL=${config.waha.webhookBaseUrl}/waha-webhook/${numberId}`,
-          'WHATSAPP_HOOK_EVENTS=session.status,message',
+          'WHATSAPP_HOOK_EVENTS=session.status,message,message.ack',
           'WAHA_PRINT_QR=false',
           // Auth disabled: this container is only reachable from the worker
           // over the dedicated internal waha-network, never exposed to the
