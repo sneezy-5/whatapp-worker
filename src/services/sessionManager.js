@@ -176,14 +176,25 @@ class SessionManager {
   }
 
   async cleanInactiveSessions() {
-    const oneMinuteMs = 1 * 60 * 1000;
+    // Long enough that HealthHandler's auto-reconnect (5 min cooldown between
+    // attempts) gets a real chance to recover the session before it's wiped
+    // - at 1 minute this used to fire on the very first health-check tick
+    // after any disconnect, deleting the container (and its session/auth
+    // volume) before reconnect logic - or a human debugging the failure -
+    // ever got a look in.
+    const inactivityThresholdMs = 10 * 60 * 1000;
     const now = Date.now();
 
     for (const session of this.sessions.values()) {
+      // Still waiting on the initial QR scan: not "inactive", just not yet
+      // scanned. Deleting it here would yank the QR out from under whoever
+      // is about to scan it.
+      if (session.qrCode) continue;
+
       if (!session.connected && session.disconnectedSince && !(session.sendInProgress > 0)) {
         const inactiveTime = now - session.disconnectedSince;
-        if (inactiveTime > oneMinuteMs) {
-          logger.warn(`[CLEANUP] Session ${session.sessionId} has been disconnected for more than 1 minute. Deleting...`);
+        if (inactiveTime > inactivityThresholdMs) {
+          logger.warn(`[CLEANUP] Session ${session.sessionId} has been disconnected for more than ${inactivityThresholdMs / 60000} minutes. Deleting...`);
 
           const { numberId, sessionId } = session;
           await this.closeSession(numberId, true);
