@@ -2,13 +2,48 @@ import axios from 'axios';
 import logger from '../utils/logger.js';
 
 const SESSION_NAME = 'default';
+const CONNECTION_ERROR_CODES = new Set(['ECONNREFUSED', 'ECONNRESET', 'ENOTFOUND', 'EAI_AGAIN']);
 
 function client(baseUrl) {
   return axios.create({ baseURL: baseUrl, timeout: 30000 });
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 class WahaClient {
+  /**
+   * The container is running as soon as `docker start` returns, but the WAHA
+   * process inside it takes a few seconds to actually bind port 3000 -
+   * calling the API immediately after start() fails with ECONNREFUSED.
+   * Retries connection-level failures only (not real API errors) for up to
+   * ~60s, which comfortably covers normal boot time.
+   */
+  async waitUntilReachable(baseUrl, { timeoutMs = 60000, intervalMs = 1500 } = {}) {
+    const deadline = Date.now() + timeoutMs;
+    let lastError;
+
+    while (Date.now() < deadline) {
+      try {
+        await client(baseUrl).get('/api/server/version');
+        return;
+      } catch (error) {
+        if (!CONNECTION_ERROR_CODES.has(error.code)) {
+          // Container is reachable and answering (even a 404) - good enough.
+          return;
+        }
+        lastError = error;
+        await sleep(intervalMs);
+      }
+    }
+
+    throw lastError || new Error(`WAHA container at ${baseUrl} never became reachable`);
+  }
+
   async startSession(baseUrl) {
+    await this.waitUntilReachable(baseUrl);
+
     try {
       await client(baseUrl).post('/api/sessions', {
         name: SESSION_NAME,
