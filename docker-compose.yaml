@@ -8,7 +8,7 @@ services:
       RABBITMQ_URL: amqp://guest:guest@213.199.54.136:5672
       NODE_ENV: production
       WAHA_IMAGE: devlikeapro/waha:latest
-      DOCKER_NETWORK: whatsapp-network
+      DOCKER_NETWORK: waha-network
       WEBHOOK_PORT: "3001"
       WORKER_PUBLIC_URL: http://worker:3001
     volumes:
@@ -23,7 +23,7 @@ services:
     group_add:
       - "989"
     networks:
-      - whatsapp-network
+      - waha-network
     deploy:
       replicas: 1
       restart_policy:
@@ -44,5 +44,14 @@ services:
           memory: 256MB
 
 networks:
-  whatsapp-network:
-    external: true
+  # Dedicated bridge network for the worker + the WAHA containers it creates
+  # dynamically (one per WhatsApp number). Deliberately NOT the shared
+  # `whatsapp-network` Swarm overlay used by other stacks (rabbitmq,
+  # backend, postgres...) on this host - that network is not "attachable"
+  # so standalone containers (this compose, and dockerode-created WAHA
+  # containers) can't join it, and recreating it would risk every other
+  # stack on the cluster. The worker doesn't need it anyway: it reaches
+  # RabbitMQ over the public RABBITMQ_URL above, not container DNS.
+  waha-network:
+    name: waha-network
+    driver: bridge

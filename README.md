@@ -48,7 +48,7 @@ WORKER_NAME="WhatsApp Worker 1"
 RABBITMQ_URL=amqp://guest:guest@localhost:5672
 
 WAHA_IMAGE=devlikeapro/waha:latest
-DOCKER_NETWORK=whatsapp-network
+DOCKER_NETWORK=waha-network
 WEBHOOK_PORT=3001
 WORKER_PUBLIC_URL=http://worker:3001
 
@@ -56,13 +56,13 @@ LOG_LEVEL=info
 NODE_ENV=development
 ```
 
+`waha-network` est un réseau bridge **dédié**, séparé de tout réseau Swarm partagé qui pourrait déjà exister sur l'hôte (souvent non "attachable" par des conteneurs standalone). `docker-compose.yaml` le crée automatiquement, aucune action manuelle requise.
+
 ### 3. Démarrer
 
-En local (hors Docker), le worker a quand même besoin d'un Docker daemon accessible (Docker Desktop) pour créer les conteneurs WAHA, et le réseau `whatsapp-network` doit exister :
+En local (hors Docker), le worker a quand même besoin d'un Docker daemon accessible (Docker Desktop) pour créer les conteneurs WAHA :
 
 ```bash
-docker network create whatsapp-network
-
 # Développement (avec hot reload)
 npm run dev
 
@@ -179,7 +179,7 @@ Statuts : `HEALTHY`, `UNHEALTHY`, `DISCONNECTED`, `NOT_FOUND`, `BANNED`
 ### Comment ça marche
 
 1. Le backend publie un `session.update` (`create`) pour un `numberId`/`phoneNumber`.
-2. Le worker crée (ou redémarre) un conteneur `waha-{numberId}` sur le réseau Docker `whatsapp-network`, avec un volume persistant `waha_session_{numberId}`.
+2. Le worker crée (ou redémarre) un conteneur `waha-{numberId}` sur le réseau Docker dédié `waha-network`, avec un volume persistant `waha_session_{numberId}`.
 3. Le conteneur WAHA notifie le worker par webhook (`http://worker:3001/waha-webhook/{numberId}`) de son état (`SCAN_QR_CODE`, `WORKING`, `FAILED`, `STOPPED`).
 4. Sur `SCAN_QR_CODE`, le worker récupère le QR via l'API WAHA et le publie sur `whatsapp.worker.events` (`qr_generated`) — le backend l'affiche pour scan.
 5. Sur `WORKING`, le worker publie `connected` + `HEALTHY`.
@@ -204,10 +204,9 @@ docker build -t whatsapp-worker:latest -f DockerFile .
 ### Lancer avec Docker Compose
 
 ```bash
-docker network create whatsapp-network   # si pas déjà créé
-docker-compose up -d
-docker-compose logs -f worker
-docker-compose down
+docker compose up -d --build
+docker compose logs -f worker
+docker compose down
 ```
 
 ### Configuration Docker
@@ -215,6 +214,7 @@ docker-compose down
 Le `docker-compose.yaml` :
 - Monte `/var/run/docker.sock` dans le worker pour qu'il puisse créer/gérer les conteneurs WAHA (équivalent à un accès root sur l'hôte — nécessaire pour l'architecture "un conteneur par numéro").
 - `group_add` doit correspondre au GID du socket Docker de l'hôte (`stat -c '%g' /var/run/docker.sock`).
+- Crée et utilise `waha-network`, un réseau bridge **dédié** — volontairement séparé de tout réseau Swarm partagé (`docker network ls` peut en montrer d'autres sur l'hôte) : ces réseaux Swarm ne sont généralement pas "attachable" par des conteneurs standalone, et le worker n'en a de toute façon pas besoin puisqu'il joint RabbitMQ via son IP publique.
 - Les conteneurs WAHA eux-mêmes ne sont **pas** déclarés dans ce fichier : ils sont créés dynamiquement par `dockerManager.js`, visibles via `docker ps` (préfixe `waha-`).
 
 ## ⚠️ Gestion des Erreurs
