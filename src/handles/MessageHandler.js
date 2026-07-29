@@ -138,24 +138,14 @@ class MessageHandler {
           break; // Success, exit loop
 
         } catch (error) {
-          const errorMessage = error.message || '';
-          const isMarkedUnreadError = /markedUnread/i.test(errorMessage) ||
-            /markedUnread/i.test(String(error)) ||
-            (error.stack && /markedUnread/i.test(error.stack));
-
-          // If we removed the 'markedUnread' bypass, we just catch the error normally.
-          // The error will be logged below and we'll try the next number variant.
-
-          logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${errorMessage}`);
+          // WAHA's HTTP API deliberately doesn't expose the real internal
+          // error for 500s (generic message only, real detail is WAHA-side
+          // log-only) - we can no longer reliably tell "wrong number format"
+          // apart from any other failure by matching error text. So just try
+          // every variant unconditionally instead of guessing from the
+          // message, and only give up once none of them worked.
+          logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${error.message}`);
           lastError = error;
-
-          // If it's not a registration-related error (which would justify trying other variants),
-          // throw it immediately to avoid unnecessary retries.
-          if (!errorMessage.includes('not registered') &&
-            !errorMessage.includes('No LID for user') &&
-            error.code !== 'INVALID_RECIPIENT') {
-            throw error;
-          }
         }
       }
 
