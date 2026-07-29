@@ -1,7 +1,8 @@
-version: '3.8'
-
 services:
   worker:
+    build:
+      context: .
+      dockerfile: DockerFile
     image: whatsapp-worker:latest
     environment:
       RABBITMQ_URL: amqp://guest:guest@213.199.54.136:5672
