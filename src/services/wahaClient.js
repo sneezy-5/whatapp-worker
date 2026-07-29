@@ -12,6 +12,38 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+const MIME_BY_EXT = {
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  mp4: 'video/mp4',
+  mov: 'video/quicktime',
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
+  opus: 'audio/ogg',
+  wav: 'audio/wav',
+};
+
+/**
+ * WAHA's sendImage/sendVideo/sendFile/sendVoice accept a file by remote URL,
+ * but without an explicit mimetype/filename the NOWEB engine has nothing to
+ * go on to know how to package the media - it can accept the request (2xx)
+ * without the media actually reaching WhatsApp. Derive both from the URL.
+ */
+function fileFromUrl(mediaUrl) {
+  const filename = mediaUrl.split('/').pop().split('?')[0] || 'file';
+  const ext = filename.split('.').pop()?.toLowerCase();
+  const mimetype = MIME_BY_EXT[ext] || 'application/octet-stream';
+  return { url: mediaUrl, filename, mimetype };
+}
+
 class WahaClient {
   /**
    * The container is running as soon as `docker start` returns, but the WAHA
@@ -84,7 +116,7 @@ class WahaClient {
     const res = await client(baseUrl).post(endpoint, {
       session: SESSION_NAME,
       chatId,
-      file: { url: mediaUrl },
+      file: fileFromUrl(mediaUrl),
       caption,
     });
     return res.data;
