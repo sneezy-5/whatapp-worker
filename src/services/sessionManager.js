@@ -230,6 +230,60 @@ class SessionManager {
         }
       }
     }
+
+    // 2. Reap des conteneurs WAHA orphelins (présents sur l'hôte mais sans
+    //    session en mémoire : restore échoué, createSession qui a throw avant
+    //    d'enregistrer la session, ancien conteneur d'un worker précédent...).
+    //    Sans ça ils tournent indéfiniment et consomment la RAM.
+    await this.reapOrphanContainers();
+  }
+
+  async reapOrphanContainers() {
+    let containers;
+    try {
+      containers = await dockerManager.listManagedContainers();
+    } catch (error) {
+      logger.error('[REAP] Failed to list managed containers:', error.message);
+      return;
+    }
+
+    const now = Date.now();
+    // Ne pas toucher un conteneur créé il y a moins de 5 min : createSession
+    // crée le conteneur AVANT d'insérer la session dans la Map, il y a une
+    // courte fenêtre où un conteneur légitime n'est pas encore "tracké".
+    const minAgeMs = 5 * 60 * 1000;
+
+    const trackedNumberIds = new Set(
+      Array.from(this.sessions.values()).map((s) => s.numberId)
+    );
+
+    for (const c of containers) {
+      if (trackedNumberIds.has(c.numberId)) continue;
+
+      if (c.created && now - c.created * 1000 < minAgeMs) {
+        logger.debug(`[REAP] Container waha-${c.numberId} untracked but < 5 min old, skipping`);
+        continue;
+      }
+
+      logger.warn(`[REAP] Orphan WAHA container for numberId ${c.numberId} (no active session). Removing container + volume...`);
+
+      try {
+        await this.closeSession(c.numberId, true);
+      } catch (error) {
+        logger.error(`[REAP] Failed to remove orphan container ${c.numberId}:`, error.message);
+        continue;
+      }
+
+      try {
+        await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
+          action: 'deleted_orphan',
+          numberId: c.numberId,
+          timestamp: Date.now(),
+        });
+      } catch (pubError) {
+        logger.error(`[REAP] Failed to publish orphan deletion event for ${c.numberId}:`, pubError.message);
+      }
+    }
   }
 
   async restoreSessions() {
@@ -240,12 +294,28 @@ class SessionManager {
 
     let restored = 0;
     let failed = 0;
+    let removedDead = 0;
 
-    for (const { numberId, phoneNumber } of containers) {
+    for (const { numberId, phoneNumber, running } of containers) {
       if (!phoneNumber) {
         logger.warn(`[RESTORE] Container for numberId ${numberId} has no phoneNumber label, skipping`);
         continue;
       }
+
+      // Conteneur mort/arrêté : ne pas le rallumer (il ressusciterait à chaque
+      // redémarrage du worker et consommerait la RAM). On le supprime ;
+      // le volume d'auth est conservé pour une éventuelle recréation propre.
+      if (!running) {
+        logger.warn(`[RESTORE] Container waha-${numberId} is not running (dead). Removing (volume kept)...`);
+        try {
+          await dockerManager.removeContainer(numberId, { removeVolume: false });
+          removedDead++;
+        } catch (error) {
+          logger.error(`[RESTORE] Failed to remove dead container ${numberId}:`, error.message);
+        }
+        continue;
+      }
+
       try {
         logger.info(`[RESTORE] Restoring session for numberId: ${numberId}, phone: ${phoneNumber}...`);
         await this.createSession(numberId, phoneNumber);
@@ -256,7 +326,7 @@ class SessionManager {
       }
     }
 
-    logger.info(`[RESTORE] Restoration complete: ${restored} restored, ${failed} failed`);
+    logger.info(`[RESTORE] Restoration complete: ${restored} restored, ${failed} failed, ${removedDead} dead removed`);
   }
 
   /**
@@ -317,6 +387,18 @@ class SessionManager {
         session.connected = false;
         session.isReady = false;
         session.disconnectedSince = session.disconnectedSince || Date.now();
+
+        // Libère la RAM (Chromium/WEBJS ≈ 400 Mo) tout de suite au lieu
+        // d'attendre les 10 min de cleanInactiveSessions. Le volume d'auth
+        // est conservé ; le reconnect auto (HealthHandler) redémarrera le
+        // conteneur si la session est récupérable, sinon cleanInactiveSessions
+        // finira par supprimer conteneur + volume.
+        try {
+          await dockerManager.stopContainer(numberId);
+          logger.info(`[STATUS] Container stopped for ${sessionId} after ${status} (RAM freed, volume kept)`);
+        } catch (stopError) {
+          logger.error(`[STATUS] Failed to stop container for ${sessionId} after ${status}:`, stopError);
+        }
 
         await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
           action: status === 'FAILED' ? 'error' : 'disconnected',

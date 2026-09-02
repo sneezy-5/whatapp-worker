@@ -2,6 +2,7 @@ import express from 'express';
 import { config } from './config/config.js';
 import logger from './utils/logger.js';
 import sessionManager from './services/sessionManager.js';
+import rabbitmq from './services/rabbitMQService.js';
 
 class WebhookServer {
   constructor() {
@@ -11,6 +12,21 @@ class WebhookServer {
   start() {
     const app = express();
     app.use(express.json({ limit: '25mb' }));
+
+    // Endpoint de monitoring : 200 si RabbitMQ est connecté ET consomme,
+    // 503 sinon. À brancher sur un healthcheck Docker / une sonde externe
+    // (UptimeKuma, Prometheus blackbox, cron curl...) pour être alerté
+    // AVANT de devoir redémarrer à la main.
+    app.get('/health', (req, res) => {
+      const rmq = rabbitmq.getStatus();
+      const ok = rmq.healthy;
+      res.status(ok ? 200 : 503).json({
+        status: ok ? 'ok' : 'degraded',
+        rabbitmq: rmq,
+        uptime: process.uptime(),
+        timestamp: Date.now(),
+      });
+    });
 
     app.post('/waha-webhook/:numberId', async (req, res) => {
       const numberId = parseInt(req.params.numberId, 10);

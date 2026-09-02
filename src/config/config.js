@@ -25,6 +25,12 @@ export const config = {
       workerEvents: process.env.QUEUE_WORKER_EVENTS || 'whatsapp.worker.events',
     },
     prefetch: 1,
+    // Heartbeat AMQP (secondes). Empêche les proxies/firewalls de tuer une
+    // connexion inactive et permet de détecter une coupure réseau rapidement.
+    heartbeat: parseInt(process.env.RABBITMQ_HEARTBEAT) || 30,
+    // Bornes du backoff de reconnexion (ms).
+    reconnectMinDelay: parseInt(process.env.RABBITMQ_RECONNECT_MIN_DELAY) || 2000,
+    reconnectMaxDelay: parseInt(process.env.RABBITMQ_RECONNECT_MAX_DELAY) || 30000,
   },
 
   // Backend API

@@ -151,6 +151,10 @@ class DockerManager {
         name: containerName(numberId),
         baseUrl: `http://${containerName(numberId)}:3000`,
         running: c.State === 'running',
+        // Unix seconds. Sert de garde-fou au reaper d'orphelins : on ne
+        // supprime pas un conteneur qui vient d'être créé (fenêtre de course
+        // pendant createSession, avant que la session soit dans la Map).
+        created: c.Created || 0,
       };
     });
   }

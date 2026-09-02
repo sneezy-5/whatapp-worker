@@ -8,70 +8,123 @@ class RabbitMQService {
     this.channel = null;
     this.connected = false;
     this.reconnecting = false;
+    // On mémorise chaque consumer enregistré pour pouvoir le REJOUER à chaque
+    // reconnexion. Sans ça, après une coupure RabbitMQ la connexion revient
+    // mais plus personne ne consomme les queues → il fallait redémarrer le
+    // service à la main.
+    this.consumers = [];
+    // Flag pour distinguer un close() volontaire (shutdown) d'une coupure subie.
+    this.closing = false;
+    // Timestamp de la dernière connexion réussie / dernière coupure (monitoring).
+    this.lastConnectedAt = null;
+    this.lastDisconnectedAt = null;
+    this.reconnectAttempts = 0;
   }
 
   async connect() {
-    try {
-      logger.info('Connecting to RabbitMQ...');
-      this.connection = await amqp.connect(config.rabbitmq.url);
-      this.channel = await this.connection.createChannel();
+    this.closing = false;
 
-      // Prefetch BEFORE consumers start
-      await this.channel.prefetch(config.rabbitmq.prefetch || 1);
+    logger.info('Connecting to RabbitMQ...');
 
-      // Declare exchange
-      await this.channel.assertExchange('whatsapp.exchange', 'direct', {
-        durable: true,
-      });
+    this.connection = await amqp.connect(config.rabbitmq.url, {
+      heartbeat: config.rabbitmq.heartbeat,
+    });
+    this.channel = await this.connection.createChannel();
 
-      // Declare queues
-      const queues = config.rabbitmq.queues;
+    // Prefetch BEFORE consumers start
+    await this.channel.prefetch(config.rabbitmq.prefetch || 1);
 
-      for (const key in queues) {
-        await this.channel.assertQueue(queues[key], { durable: true });
-      }
+    // Declare exchange
+    await this.channel.assertExchange('whatsapp.exchange', 'direct', {
+      durable: true,
+    });
 
-      // Bind queues
-      await this.channel.bindQueue(
-        queues.sessionUpdate,
-        'whatsapp.exchange',
-        'session.update'
-      );
+    // Declare queues
+    const queues = config.rabbitmq.queues;
 
-      await this.channel.bindQueue(
-        queues.messageSend,
-        'whatsapp.exchange',
-        'message.send'
-      );
+    for (const key in queues) {
+      await this.channel.assertQueue(queues[key], { durable: true });
+    }
 
-      await this.channel.bindQueue(
-        queues.messageReceive,
-        'whatsapp.exchange',
-        'message.receive'
-      );
+    // Bind queues
+    await this.channel.bindQueue(
+      queues.sessionUpdate,
+      'whatsapp.exchange',
+      'session.update'
+    );
 
-      await this.channel.bindQueue(
-        queues.numberHealth,
-        'whatsapp.exchange',
-        'number.health'
-      );
+    await this.channel.bindQueue(
+      queues.messageSend,
+      'whatsapp.exchange',
+      'message.send'
+    );
 
-      this.connected = true;
-      logger.info('RabbitMQ connected and queues declared');
+    await this.channel.bindQueue(
+      queues.messageReceive,
+      'whatsapp.exchange',
+      'message.receive'
+    );
 
-      // Auto-reconnect
-      this.connection.on('close', () => this.handleClose());
-      this.connection.on('error', (err) => this.handleError(err));
+    await this.channel.bindQueue(
+      queues.numberHealth,
+      'whatsapp.exchange',
+      'number.health'
+    );
 
-    } catch (error) {
-      logger.error('Failed to connect RabbitMQ:', error);
-      throw error;
+    this.connected = true;
+    this.lastConnectedAt = Date.now();
+    this.reconnectAttempts = 0;
+    logger.info('RabbitMQ connected and queues declared');
+
+    // Auto-reconnect : on écoute connection ET channel.
+    this.connection.on('close', () => this.handleClose());
+    this.connection.on('error', (err) => this.handleError(err));
+    this.connection.on('blocked', (reason) =>
+      logger.warn(`RabbitMQ connection blocked by broker: ${reason}`)
+    );
+    this.connection.on('unblocked', () =>
+      logger.info('RabbitMQ connection unblocked by broker')
+    );
+    this.channel.on('close', () =>
+      logger.warn('RabbitMQ channel closed')
+    );
+    this.channel.on('error', (err) =>
+      logger.error('RabbitMQ channel error:', err)
+    );
+
+    // ✅ REJEU DES CONSUMERS : indispensable après une reconnexion.
+    await this.replayConsumers();
+  }
+
+  async replayConsumers() {
+    if (this.consumers.length === 0) return;
+
+    logger.info(`Re-registering ${this.consumers.length} consumer(s) after (re)connect`);
+
+    for (const { queue, handler } of this.consumers) {
+      await this.registerConsumer(queue, handler);
     }
   }
 
   async consume(queue, handler) {
-    if (!this.connected) throw new Error("RabbitMQ not connected");
+    // On garde la définition en mémoire pour les reconnexions futures,
+    // sans doublon si la même queue est réenregistrée.
+    const existing = this.consumers.find((c) => c.queue === queue);
+    if (existing) {
+      existing.handler = handler;
+    } else {
+      this.consumers.push({ queue, handler });
+    }
 
+    if (!this.connected || !this.channel) {
+      logger.warn(`RabbitMQ not connected yet, consumer for ${queue} will start on connect`);
+      return;
+    }
+
+    await this.registerConsumer(queue, handler);
+  }
+
+  async registerConsumer(queue, handler) {
     logger.info(`Starting consumer on ${queue}`);
 
     await this.channel.consume(
@@ -101,10 +154,15 @@ class RabbitMQService {
             messageContent: msg.content.toString()
           });
 
-          if (error.temporary) {
-            this.channel.nack(msg, false, true);
-          } else {
-            this.channel.nack(msg, false, false);
+          // Un nack sur un channel déjà mort lève une exception : on protège.
+          try {
+            if (error.temporary) {
+              this.channel.nack(msg, false, true);
+            } else {
+              this.channel.nack(msg, false, false);
+            }
+          } catch (nackError) {
+            logger.error(`Failed to nack message on ${queue}:`, nackError.message);
           }
         }
       },
@@ -125,14 +183,18 @@ class RabbitMQService {
 
     const content = Buffer.from(JSON.stringify(data));
 
-    this.channel.sendToQueue(queue, content, {
-      persistent: true,
-    });
-
-    logger.debug(`Message sent to ${queue}`);
+    try {
+      this.channel.sendToQueue(queue, content, {
+        persistent: true,
+      });
+      logger.debug(`Message sent to ${queue}`);
+    } catch (error) {
+      logger.error(`Failed to publish to ${queue}:`, error.message);
+    }
   }
 
   async close() {
+    this.closing = true;
     try {
       if (this.channel) await this.channel.close();
       if (this.connection) await this.connection.close();
@@ -140,24 +202,77 @@ class RabbitMQService {
       logger.info('RabbitMQ closed');
     } catch (err) {
       logger.error('Error closing RabbitMQ', err);
+    } finally {
+      this.channel = null;
+      this.connection = null;
     }
   }
 
-  async handleClose() {
-    logger.warn("RabbitMQ closed, reconnecting in 5s");
-    this.connected = false;
-
-    if (!this.reconnecting) {
-      this.reconnecting = true;
-      setTimeout(() => {
-        this.reconnecting = false;
-        this.connect();
-      }, 5000);
+  handleClose() {
+    if (this.connected) {
+      this.lastDisconnectedAt = Date.now();
     }
+    this.connected = false;
+    this.channel = null;
+    this.connection = null;
+
+    if (this.closing) {
+      logger.info('RabbitMQ connection closed (intentional shutdown)');
+      return;
+    }
+
+    this.scheduleReconnect();
+  }
+
+  scheduleReconnect() {
+    if (this.reconnecting) return;
+    this.reconnecting = true;
+
+    const { reconnectMinDelay, reconnectMaxDelay } = config.rabbitmq;
+    // Backoff exponentiel borné : 2s, 4s, 8s ... plafonné à 30s. Jamais d'abandon.
+    const delay = Math.min(
+      reconnectMinDelay * 2 ** this.reconnectAttempts,
+      reconnectMaxDelay
+    );
+    this.reconnectAttempts += 1;
+
+    logger.warn(`RabbitMQ down — reconnecting in ${delay}ms (attempt #${this.reconnectAttempts})`);
+
+    setTimeout(async () => {
+      try {
+        await this.connect();
+        this.reconnecting = false;
+        logger.info('RabbitMQ reconnected successfully');
+      } catch (err) {
+        this.reconnecting = false;
+        logger.error(`RabbitMQ reconnect attempt #${this.reconnectAttempts} failed:`, err.message);
+        // On relance une tentative : la boucle ne s'arrête jamais tant que
+        // ce n'est pas un shutdown volontaire.
+        if (!this.closing) this.scheduleReconnect();
+      }
+    }, delay);
   }
 
   handleError(err) {
-    logger.error("RabbitMQ connection error:", err);
+    logger.error('RabbitMQ connection error:', err.message || err);
+    // Pas de reconnexion ici : 'error' est toujours suivi de 'close' qui la gère.
+  }
+
+  // Pour le monitoring (endpoint /health).
+  isHealthy() {
+    return this.connected && this.channel !== null;
+  }
+
+  getStatus() {
+    return {
+      connected: this.connected,
+      healthy: this.isHealthy(),
+      reconnecting: this.reconnecting,
+      reconnectAttempts: this.reconnectAttempts,
+      consumers: this.consumers.map((c) => c.queue),
+      lastConnectedAt: this.lastConnectedAt,
+      lastDisconnectedAt: this.lastDisconnectedAt,
+    };
   }
 }
 
