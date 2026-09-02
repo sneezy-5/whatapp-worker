@@ -280,6 +280,15 @@ class SessionManager {
           numberId: c.numberId,
           timestamp: Date.now(),
         });
+
+        // Indispensable : sans ça le backend garde le numéro "connecté" sur
+        // le dashboard client alors que le conteneur n'existe plus.
+        await rabbitmq.publish(config.rabbitmq.queues.numberHealth, {
+          numberId: c.numberId,
+          status: 'DISCONNECTED',
+          reason: 'Orphan container removed (no active session)',
+          workerId: config.worker.id,
+        });
       } catch (pubError) {
         logger.error(`[REAP] Failed to publish orphan deletion event for ${c.numberId}:`, pubError.message);
       }
@@ -294,7 +303,6 @@ class SessionManager {
 
     let restored = 0;
     let failed = 0;
-    let removedDead = 0;
 
     for (const { numberId, phoneNumber, running } of containers) {
       if (!phoneNumber) {
@@ -302,22 +310,15 @@ class SessionManager {
         continue;
       }
 
-      // Conteneur mort/arrêté : ne pas le rallumer (il ressusciterait à chaque
-      // redémarrage du worker et consommerait la RAM). On le supprime ;
-      // le volume d'auth est conservé pour une éventuelle recréation propre.
-      if (!running) {
-        logger.warn(`[RESTORE] Container waha-${numberId} is not running (dead). Removing (volume kept)...`);
-        try {
-          await dockerManager.removeContainer(numberId, { removeVolume: false });
-          removedDead++;
-        } catch (error) {
-          logger.error(`[RESTORE] Failed to remove dead container ${numberId}:`, error.message);
-        }
-        continue;
-      }
-
+      // Un conteneur arrêté n'est PAS une session morte : après un reboot de
+      // l'hôte, un redeploy, un restart du daemon Docker, ou notre propre
+      // stopContainer sur FAILED, tous les conteneurs sont `exited` alors que
+      // le volume d'auth est intact et la session récupérable. On les rallume.
+      // Les sessions réellement mortes seront nettoyées (conteneur + volume,
+      // avec notif backend) par cleanInactiveSessions au bout de 10 min, et
+      // les conteneurs sans session par reapOrphanContainers.
       try {
-        logger.info(`[RESTORE] Restoring session for numberId: ${numberId}, phone: ${phoneNumber}...`);
+        logger.info(`[RESTORE] Restoring session for numberId: ${numberId}, phone: ${phoneNumber} (container ${running ? 'running' : 'stopped, will restart'})...`);
         await this.createSession(numberId, phoneNumber);
         restored++;
       } catch (error) {
@@ -326,7 +327,7 @@ class SessionManager {
       }
     }
 
-    logger.info(`[RESTORE] Restoration complete: ${restored} restored, ${failed} failed, ${removedDead} dead removed`);
+    logger.info(`[RESTORE] Restoration complete: ${restored} restored, ${failed} failed`);
   }
 
   /**
