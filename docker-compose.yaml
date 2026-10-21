@@ -4,6 +4,9 @@ services:
       context: .
       dockerfile: DockerFile
     image: whatsapp-worker:latest
+    env_file:
+      - path: .env
+        required: false
     environment:
       RABBITMQ_URL: amqp://guest:guest@213.199.54.136:5672
       NODE_ENV: production

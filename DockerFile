@@ -1,5 +1,5 @@
 # Multi-stage build for WhatsApp Worker (WAHA orchestrator)
-FROM node:20-bullseye AS dependencies
+FROM node:20-bookworm AS dependencies
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ COPY package*.json ./
 RUN npm install --production && npm cache clean --force
 
 # Stage 2: Runtime
-FROM node:20-bullseye
+FROM node:20-bookworm
 
 WORKDIR /app
 
