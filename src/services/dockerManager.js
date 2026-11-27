@@ -86,6 +86,17 @@ class DockerManager {
       return { name, baseUrl: `http://${name}:3000` };
     }
 
+    // An existing container keeps the env it was created with: numbers whose
+    // container predates the switch to WEBJS still run NOWEB/GOWS (messages
+    // accepted by the API but never delivered). Only a regenerate_qr (which
+    // removes container + volume) recreates it with the current engine.
+    const envEngine = (info.Config?.Env || [])
+      .find((e) => e.startsWith('WHATSAPP_DEFAULT_ENGINE='))
+      ?.split('=')[1];
+    if (envEngine && envEngine !== config.waha.engine) {
+      logger.error(`[DOCKER] ${name} runs engine ${envEngine} but config expects ${config.waha.engine}. Send a regenerate_qr for number ${numberId} to recreate it.`);
+    }
+
     if (!info.State.Running) {
       logger.info(`[DOCKER] Starting existing WAHA container ${name}`);
       await container.start();

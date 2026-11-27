@@ -62,6 +62,7 @@ class SessionManager {
       // worker restart) and webhooks only fire on state *changes*.
       const status = await wahaClient.getStatus(baseUrl);
       await this.onSessionStatus(numberId, status);
+      this.startStatusWatch(numberId);
     } catch (error) {
       logger.error({ err: error }, `[CREATE SESSION] Failed to start WAHA session for ${sessionId}`);
       throw error;
@@ -73,6 +74,7 @@ class SessionManager {
   async closeSession(numberId, deleteFiles = false) {
     const session = this.getSession(numberId);
     logger.info(`[CLOSE SESSION] Closing session for numberId ${numberId} (deleteFiles: ${deleteFiles})`);
+    this.stopStatusWatch(session);
 
     if (deleteFiles) {
       await dockerManager.removeContainer(numberId, { removeVolume: true });
@@ -131,11 +133,26 @@ class SessionManager {
           throw new Error(`Unsupported message type: ${type}`);
       }
 
-      logger.info(`Message sent successfully to ${recipient}`);
+      // WEBJS returns id as { _serialized, id, ... }; other engines may return
+      // a plain string or { key: { id } }. message.ack webhooks carry the
+      // full serialized id, so that's the one to key pendingAcks on.
+      const waMessageId =
+        result?.id?._serialized ||
+        (typeof result?.id === 'string' ? result.id : null) ||
+        result?.key?.id ||
+        null;
 
-      const waMessageId = result?.id?.id || result?.id || null;
+      if (!waMessageId) {
+        // WAHA answered 2xx but WhatsApp produced no message: nothing was
+        // actually sent. Reporting SENT here is what made messages "leave"
+        // on the dashboard while never reaching the recipient.
+        logger.error(`WAHA returned no message id for ${recipient}, response: ${JSON.stringify(result)}`);
+        throw new Error(`WhatsApp did not create the message (no message id returned) for ${recipient}`);
+      }
 
-      if (waMessageId && messageId) {
+      logger.info(`Message sent successfully to ${recipient} (waId: ${waMessageId})`);
+
+      if (messageId) {
         this.pendingAcks.set(waMessageId, { messageId, numberId });
       }
 
@@ -159,6 +176,32 @@ class SessionManager {
     } finally {
       session.sendInProgress = Math.max(0, (session.sendInProgress || 1) - 1);
     }
+  }
+
+  /**
+   * Returns the chatId WhatsApp actually knows for the first variant that has
+   * an account, or null if none of them do.
+   */
+  async resolveRecipient(numberId, variants) {
+    const session = this.getSession(numberId);
+    if (!session) throw new Error(`Session not found for number ID: ${numberId}`);
+
+    for (const variant of variants) {
+      try {
+        const { exists, chatId } = await wahaClient.checkNumberExists(session.baseUrl, variant);
+        logger.info(`[CHECK NUMBER] ${variant} -> exists=${exists} chatId=${chatId}`);
+        if (exists) return chatId || `${variant}@c.us`;
+      } catch (error) {
+        const apiMessage = error.response?.data?.message || error.message;
+        logger.warn(`[CHECK NUMBER] check-exists failed for ${variant}: ${apiMessage}`);
+        // Can't verify (endpoint error): rethrow so the message is retried
+        // instead of being blindly sent to a possibly wrong chatId.
+        const wrapped = new Error(`Could not verify recipient ${variant}: ${apiMessage}`);
+        wrapped.temporary = true;
+        throw wrapped;
+      }
+    }
+    return null;
   }
 
   getSession(numberId) {
@@ -331,6 +374,57 @@ class SessionManager {
   }
 
   /**
+   * Polls WAHA while the session is starting / waiting for a scan.
+   * - WEBJS takes a while to boot Chromium; if the SCAN_QR_CODE webhook is
+   *   missed, the QR would otherwise never be published.
+   * - WhatsApp rotates the QR every ~20s but WAHA only fires session.status
+   *   on state *changes*, so without this the backend keeps showing the
+   *   first (expired) QR and the scan fails until someone regenerates.
+   */
+  startStatusWatch(numberId, { intervalMs = 5000, maxDurationMs = 10 * 60 * 1000 } = {}) {
+    const session = this.getSession(numberId);
+    if (!session) return;
+    this.stopStatusWatch(session);
+
+    const deadline = Date.now() + maxDurationMs;
+    let busy = false;
+
+    session.statusWatch = setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const current = this.getSession(numberId);
+        if (!current || current !== session || Date.now() > deadline) {
+          this.stopStatusWatch(session);
+          return;
+        }
+
+        const status = await wahaClient.getStatus(session.baseUrl);
+        // Re-running onSessionStatus for SCAN_QR_CODE refetches the QR and
+        // only republishes it if it changed.
+        if (status !== session.lastStatus || status === 'SCAN_QR_CODE') {
+          await this.onSessionStatus(numberId, status);
+        }
+
+        if (['WORKING', 'FAILED', 'STOPPED'].includes(status)) {
+          this.stopStatusWatch(session);
+        }
+      } catch (error) {
+        logger.debug(`[STATUS WATCH] ${session.sessionId}: ${error.message}`);
+      } finally {
+        busy = false;
+      }
+    }, intervalMs);
+  }
+
+  stopStatusWatch(session) {
+    if (session?.statusWatch) {
+      clearInterval(session.statusWatch);
+      session.statusWatch = null;
+    }
+  }
+
+  /**
    * Called by the webhook server when a WAHA container reports a
    * session.status change.
    */
@@ -342,13 +436,18 @@ class SessionManager {
     }
 
     const { sessionId } = session;
-    logger.info(`[STATUS] ${sessionId} -> ${status}`);
+    if (status !== session.lastStatus) {
+      logger.info(`[STATUS] ${sessionId} -> ${status}`);
+    }
+    session.lastStatus = status;
 
     switch (status) {
       case 'SCAN_QR_CODE': {
         try {
           const qrCode = await wahaClient.getQrBase64(session.baseUrl);
+          if (qrCode === session.qrCode) break; // unchanged, don't spam backend
           session.qrCode = qrCode;
+          logger.info(`[QR] New QR published for ${sessionId}`);
 
           await rabbitmq.publish(config.rabbitmq.queues.workerEvents, {
             action: 'qr_generated',

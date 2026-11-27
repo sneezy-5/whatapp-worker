@@ -113,46 +113,29 @@ class MessageHandler {
       // Get all number variants (for Ivory Coast old/new format handling)
       const numberVariants = this.getIvoryCoastNumberVariants(recipientNumber);
 
-      let result = null;
-      let lastError = null;
-      let successfulNumber = null;
+      // Ask WhatsApp which variant actually has an account. WAHA accepts a
+      // send to a non-existent chatId with a 2xx and the message silently
+      // goes nowhere, so "send succeeded" can't be used to pick the variant.
+      const chatId = await sessionManager.resolveRecipient(numberId, numberVariants);
 
-      // Try each variant until one works
-      for (const variant of numberVariants) {
-        const formattedRecipient = variant + '@c.us';
-
-        try {
-          logger.info(`[MESSAGE HANDLER] Trying to send to: ${formattedRecipient}`);
-
-          result = await sessionManager.sendMessage(
-            numberId,
-            formattedRecipient,
-            content,
-            type,
-            mediaUrl,
-            messageId
-          );
-
-          successfulNumber = formattedRecipient;
-          logger.info(`[MESSAGE HANDLER] ✅ Message sent successfully to ${formattedRecipient}`);
-          break; // Success, exit loop
-
-        } catch (error) {
-          // WAHA's HTTP API deliberately doesn't expose the real internal
-          // error for 500s (generic message only, real detail is WAHA-side
-          // log-only) - we can no longer reliably tell "wrong number format"
-          // apart from any other failure by matching error text. So just try
-          // every variant unconditionally instead of guessing from the
-          // message, and only give up once none of them worked.
-          logger.warn(`[MESSAGE HANDLER] Failed to send to ${formattedRecipient}: ${error.message}`);
-          lastError = error;
-        }
+      if (!chatId) {
+        const notFound = new Error(`Recipient ${recipientNumber} is not registered on WhatsApp (tried: ${numberVariants.join(', ')})`);
+        notFound.code = 'INVALID_RECIPIENT';
+        throw notFound;
       }
 
-      // If no variant worked, throw the last error
-      if (!result) {
-        throw lastError || new Error(`Failed to send message to any number variant`);
-      }
+      logger.info(`[MESSAGE HANDLER] Sending to resolved chatId: ${chatId}`);
+
+      const result = await sessionManager.sendMessage(
+        numberId,
+        chatId,
+        content,
+        type,
+        mediaUrl,
+        messageId
+      );
+
+      logger.info(`[MESSAGE HANDLER] ✅ Message sent successfully to ${chatId}`);
 
       // Send success response to backend
       logger.info(`[MESSAGE HANDLER] 📤 Publishing SUCCESS/SENT status for message ${messageId} to queue: ${config.rabbitmq.queues.messageReceive}`);

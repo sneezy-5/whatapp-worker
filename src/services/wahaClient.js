@@ -103,6 +103,22 @@ class WahaClient {
     return `data:${res.data.mimetype};base64,${res.data.data}`;
   }
 
+  /**
+   * Asks WhatsApp whether a phone number has an account, and returns the
+   * canonical chatId WhatsApp knows it under. Sending to a chatId that
+   * doesn't exist is NOT rejected by WAHA (HTTP 2xx) - the message just
+   * silently goes nowhere - so this must be checked before sending.
+   */
+  async checkNumberExists(baseUrl, phone) {
+    const res = await client(baseUrl).get('/api/contacts/check-exists', {
+      params: { phone, session: SESSION_NAME },
+    });
+    return {
+      exists: !!res.data?.numberExists,
+      chatId: res.data?.chatId || null,
+    };
+  }
+
   async sendText(baseUrl, { chatId, text }) {
     const res = await client(baseUrl).post('/api/sendText', {
       session: SESSION_NAME,
